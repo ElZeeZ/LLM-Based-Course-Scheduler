@@ -37,7 +37,3 @@ An LLM-based assistant that helps university students with course scheduling and
 * Project structure may evolve during development
 
 ---
-
-## Status
-
-Setup phase
