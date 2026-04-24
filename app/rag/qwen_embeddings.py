@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.rag.http_client import get_http_client
 
 
 MAX_QWEN_BATCH_SIZE = 10
@@ -57,8 +58,7 @@ def _embed_batch(
 
     for attempt in range(max_retries + 1):
         try:
-            with httpx.Client(timeout=120) as client:
-                response = client.post(url, headers=headers, json=payload)
+            response = get_http_client().post(url, headers=headers, json=payload)
             if response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
                 time.sleep(_retry_delay(response, retry_sleep_seconds, attempt))
                 continue

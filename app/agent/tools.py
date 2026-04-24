@@ -20,7 +20,7 @@ def course_search_tool(query: str) -> str:
 @tool
 def schedule_generator_tool(request: str) -> str:
     """Generate a deterministic non-conflicting schedule for an academic request."""
-    courses = retrieve_relevant_courses(request, top_k=50, unique_courses=False)
+    courses = retrieve_relevant_courses(request, top_k=40, unique_courses=False)
     schedule = generate_optimal_schedules(courses, max_credits=_extract_max_credits(request))
     return json.dumps(schedule, ensure_ascii=False)
 

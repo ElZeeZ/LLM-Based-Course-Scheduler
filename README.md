@@ -132,6 +132,22 @@ Open:
 http://127.0.0.1:8000/docs
 ```
 
+## Terminal Chat
+
+Simple course-search prompts use the fast direct RAG path: Qwen query embedding, Chroma vector search, Qwen rerank, and deterministic terminal formatting. Schedule requests still use the agent path.
+
+Run a one-shot prompt:
+
+```bash
+python scripts/chat_terminal.py "What robotics and embedded systems courses are available?"
+```
+
+Start an interactive terminal chat:
+
+```bash
+python scripts/chat_terminal.py
+```
+
 ## API Endpoints
 
 ### GET /
@@ -194,7 +210,7 @@ User asks:
 What robotics-related courses are available?
 ```
 
-The system retrieves a broad candidate pool with Qwen `text-embedding-v4` query embeddings, reranks candidates with `qwen3-rerank`, and returns the best matching courses.
+The system retrieves a 30-40 course candidate pool with Qwen `text-embedding-v4` query embeddings, reranks candidates with `qwen3-rerank`, and returns the best matching courses.
 
 User asks:
 

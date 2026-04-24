@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.rag.chroma_cloud import ChromaCloudSearch, CourseDocument, chunk_text_by_line
+from app.rag.chroma_cloud import ChromaCloudSearch, CourseDocument, chunk_text_by_line
 
 
 def main() -> None:

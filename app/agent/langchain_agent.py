@@ -26,6 +26,9 @@ class AcademicAgent:
         max_credits: float = 15,
         completed_courses: list[str] | None = None,
     ) -> dict[str, Any]:
+        if not SCHEDULE_INTENT_RE.search(message):
+            return self._course_search_run(message)
+
         try:
             agent = self._get_agent()
             result = agent.invoke({"messages": [{"role": "user", "content": message}]})
@@ -33,7 +36,7 @@ class AcademicAgent:
             content = messages[-1].content if messages else ""
             return {"response": str(content), "data": None}
         except Exception:
-            return self._fallback_run(
+            return self._schedule_fallback_run(
                 message,
                 max_credits=max_credits,
                 completed_courses=completed_courses or [],
@@ -53,30 +56,43 @@ class AcademicAgent:
         )
         return self._agent
 
-    def _fallback_run(
+    def _schedule_fallback_run(
         self,
         message: str,
         *,
         max_credits: float,
         completed_courses: list[str],
     ) -> dict[str, Any]:
-        if SCHEDULE_INTENT_RE.search(message):
-            courses = retrieve_relevant_courses(message, top_k=50, unique_courses=False)
-            generated = generate_optimal_schedules(
-                courses,
-                max_credits=max_credits,
-                completed_courses=completed_courses,
-            )
-            best = generated["best_schedule"]
-            best["explanation"] = generate_schedule_explanation(best, message)
-            return {"response": best["explanation"], "data": generated}
+        courses = retrieve_relevant_courses(message, top_k=40, unique_courses=False)
+        generated = generate_optimal_schedules(
+            courses,
+            max_credits=max_credits,
+            completed_courses=completed_courses,
+        )
+        best = generated["best_schedule"]
+        best["explanation"] = generate_schedule_explanation(best, message)
+        return {"response": best["explanation"], "data": generated}
 
+    def _course_search_run(self, message: str) -> dict[str, Any]:
         courses = retrieve_relevant_courses(message, top_k=10)
         summary = [
-            f"{course.get('course_code')} {course.get('course_name')} section {course.get('section')}"
-            for course in courses[:5]
+            _format_course_result(index, course)
+            for index, course in enumerate(courses, start=1)
         ]
         return {
             "response": "Relevant courses:\n" + "\n".join(summary),
             "data": {"results": json.loads(json.dumps(courses, default=str))},
         }
+
+
+def _format_course_result(index: int, course: dict[str, Any]) -> str:
+    score = course.get("rerank_score") or course.get("relevance_score")
+    score_text = f" score {float(score):.3f}" if score is not None else ""
+    section = course.get("section")
+    section_text = f" section {section}" if section else ""
+    credits = course.get("credits")
+    credits_text = f", {credits:g} credits" if isinstance(credits, (int, float)) else ""
+    return (
+        f"{index}. {course.get('course_code')} {course.get('course_name')}"
+        f"{section_text}{credits_text}{score_text}"
+    )

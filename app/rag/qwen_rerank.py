@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.rag.http_client import get_http_client
 
 
 DEFAULT_RERANK_INSTRUCTION = (
@@ -60,7 +61,7 @@ def rerank_courses(
 def _rerank_limit(candidate_count: int, top_n: int, unique_courses: bool) -> int:
     if not unique_courses:
         return min(top_n, candidate_count)
-    return min(max(top_n * 3, top_n + 20), candidate_count)
+    return candidate_count
 
 
 def rerank_documents(
@@ -89,8 +90,7 @@ def rerank_documents(
 
     for attempt in range(max_retries + 1):
         try:
-            with httpx.Client(timeout=120) as client:
-                response = client.post(url, headers=headers, json=payload)
+            response = get_http_client().post(url, headers=headers, json=payload)
             if response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
                 time.sleep(_retry_delay(response, retry_sleep_seconds, attempt))
                 continue

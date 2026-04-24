@@ -7,8 +7,8 @@ from app.rag.qwen_embeddings import embed_query
 from app.rag.qwen_rerank import rerank_courses
 
 
-MIN_RERANK_CANDIDATES = 50
-MAX_RERANK_CANDIDATES = 100
+MIN_RERANK_CANDIDATES = 30
+MAX_RERANK_CANDIDATES = 40
 
 
 def retrieve_relevant_courses(
@@ -30,7 +30,7 @@ def retrieve_relevant_courses(
 
 
 def _candidate_count(top_k: int) -> int:
-    return min(max(top_k * 5, MIN_RERANK_CANDIDATES), MAX_RERANK_CANDIDATES)
+    return min(max(top_k * 4, MIN_RERANK_CANDIDATES), MAX_RERANK_CANDIDATES)
 
 
 def _format_query_result(result: dict[str, Any]) -> list[dict[str, Any]]:
