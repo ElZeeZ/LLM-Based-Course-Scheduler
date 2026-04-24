@@ -21,7 +21,7 @@ openai
 langchain-openai
 
 # Vector DB
-chromadb
+chromadb>=1.5.8
 
 # Validation
 pydantic
