@@ -1,85 +1,205 @@
-# LLM-Based Course Scheduler
+# LLM-Based-Course-Scheduler
 
-## Overview
+AI academic assistant for semantic course discovery and deterministic schedule generation.
 
-An LLM-based assistant that helps university students with course scheduling and selection using course data from LAU.
+## What It Does
 
----
+The project loads `data/university_courses.json` into ChromaDB or Chroma Cloud, stores Qwen `text-embedding-v4` vectors, reranks retrieval candidates with `qwen3-rerank`, and generates academic schedules with deterministic Python constraints.
 
-## Features
+The LLM is used for reasoning, explanation, and formatting. It does not enforce hard scheduling constraints.
 
-### Schedule Generation
+## Stack
 
-* Input: desired courses + constraints (time, days, preferences)
-* Output: optimized, conflict-free schedule
+* Python
+* FastAPI
+* LangChain
+* ChromaDB / Chroma Cloud
+* Gemini 2.5 Flash
+* python-dotenv
+* JSON data input
 
-### Course Recommendation
-
-* Input: eligible courses
-* Output: balanced and optimized course selection
-
-### Chroma Cloud Search
-
-Course retrieval uses Chroma Cloud collections with hybrid dense + sparse search:
-
-* Dense embeddings: Chroma Cloud Qwen (`Qwen/Qwen3-Embedding-0.6B`)
-* Sparse embeddings: Chroma Cloud Splade (`prithivida/Splade_PP_en_v1`)
-* Ranking: Reciprocal Rank Fusion (RRF), weighted 70% dense and 30% sparse by default
-* Deduplication: `GroupBy` on `source_document_id`, with `chunk_index` metadata for traceability
-* Chunking: line-based chunks under Chroma's 16 KiB document limit
-
----
-
-## Structure
+## Project Structure
 
 ```text
-.
-|-- src/      # core logic
-|-- scripts/  # migration and maintenance commands
-|-- ui/       # interface
-|-- data/     # datasets
+LLM-Based-Course-Scheduler/
+|-- app/
+|   |-- main.py
+|   |-- config.py
+|   |-- rag/
+|   |-- agent/
+|   |-- scheduler/
+|   |-- llm/
+|   |-- api/
+|   `-- models/
+|-- data/
+|   `-- university_courses.json
+|-- scripts/
+|   |-- ingest_courses.py
+|   `-- migrate_to_chroma_cloud.py
+|-- tests/
+|-- .env.example
+|-- requirements.txt
+`-- README.md
 ```
 
----
+## Setup
 
-## Chroma Cloud Setup
+Create a virtual environment:
+
+```bash
+python -m venv .venv
+```
+
+Activate it on Windows:
+
+```powershell
+.venv\Scripts\Activate
+```
+
+Activate it on Mac/Linux:
+
+```bash
+source .venv/bin/activate
+```
 
 Install dependencies:
 
-```powershell
+```bash
 pip install -r requirements.txt
 ```
 
-Create a `.env` file with:
+Create `.env` from `.env.example`:
 
 ```env
-CHROMA_HOST=api.trychroma.com
-CHROMA_API_KEY=YOUR_CHROMA_API_KEY
-CHROMA_TENANT=51335609-8555-49e9-8762-830d64e37505
-CHROMA_DATABASE=LLM-Based-Course-Scheduler
-CHROMA_COLLECTION_PREFIX=course-catalog
+GEMINI_API_KEY=
+QWEN_API_KEY=
+QWEN_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+QWEN_EMBEDDING_MODEL=text-embedding-v4
+QWEN_EMBEDDING_DIMENSION=2048
+QWEN_RERANK_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-api/v1
+QWEN_RERANK_MODEL=qwen3-rerank
+CHROMA_API_KEY=
+CHROMA_TENANT=
+CHROMA_DATABASE=
+CHROMA_COLLECTION=course_embeddings
 ```
 
-Migrate existing course data:
+If Chroma Cloud values are present, the app uses Chroma Cloud. Otherwise it falls back to local persistent ChromaDB in `.chroma/`.
 
-```powershell
-python scripts/migrate_to_chroma_cloud.py data/courses.json --text-field description --id-field course_code --organization-id lau
+## Ingest Courses
+
+The single source of truth is:
+
+```text
+data/university_courses.json
 ```
 
-Supported import formats are `.json`, `.jsonl`, and `.csv`. Collections are sharded by `--organization-id` or `--user-id`, so mutually exclusive data does not share a collection.
+Run ingestion:
 
-Search from Python:
-
-```python
-from src.rag.chroma_cloud import ChromaCloudSearch
-
-search = ChromaCloudSearch()
-hits = search.search("computer science courses with data structures", organization_id="lau")
+```bash
+python scripts/ingest_courses.py
 ```
 
----
+The default ingestion command embeds and upserts 10 documents at a time into `course_embeddings`. Embeddings are generated with Qwen `text-embedding-v4` at 2048 dimensions, then stored explicitly in Chroma.
 
-## Notes
+If you want extra throttling between batches:
 
-* API keys are handled via `.env` (not included in repo)
-* Project structure may evolve during development
+```bash
+python scripts/ingest_courses.py --sleep-seconds 30
+```
+
+Validate the data file without writing:
+
+```bash
+python scripts/ingest_courses.py --dry-run
+```
+
+Reset and re-ingest the collection:
+
+```bash
+python scripts/ingest_courses.py --reset
+```
+
+## Run FastAPI
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+## API Endpoints
+
+### GET /
+
+Health/root endpoint.
+
+### POST /search-courses
+
+Example:
+
+```json
+{
+  "query": "robotics courses",
+  "top_k": 10
+}
+```
+
+### POST /generate-schedule
+
+Example:
+
+```json
+{
+  "query": "Create a 15-credit schedule focused on robotics and embedded systems",
+  "max_credits": 15,
+  "completed_courses": ["MTH 201", "CSC 243"],
+  "preferred_days": ["Mon", "Wed"]
+}
+```
+
+### POST /chat
+
+Example:
+
+```json
+{
+  "message": "What robotics-related courses are available?",
+  "max_credits": 15,
+  "completed_courses": []
+}
+```
+
+## Scheduling Guarantees
+
+The deterministic scheduler enforces:
+
+* No time conflicts
+* Day overlap detection
+* Max credit limit
+* Prerequisite validation when prerequisite data is available
+* One section per course
+
+Supported day formats include `MWF`, `TTH`, `TR`, `Mon Wed`, `Tue Thu`, and full day names.
+
+## Expected Behavior
+
+User asks:
+
+```text
+What robotics-related courses are available?
+```
+
+The system retrieves a broad candidate pool with Qwen `text-embedding-v4` query embeddings, reranks candidates with `qwen3-rerank`, and returns the best matching courses.
+
+User asks:
+
+```text
+Create a 15-credit schedule focused on robotics and embedded systems
+```
+
+The system retrieves relevant courses, removes conflicts, respects prerequisites and max credits, and returns the best schedule with alternatives and rejected conflicts.
