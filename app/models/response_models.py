@@ -10,6 +10,7 @@ class CourseResult(BaseModel):
     course_code: str | None = None
     course_name: str | None = None
     department: str | None = None
+    department_name: str | None = None
     credits: float | None = None
     semester: str | None = None
     section: str | None = None

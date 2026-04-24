@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_FILE = ROOT_DIR / "data" / "university_courses.json"
+DATA_FILE = ROOT_DIR / "lau_catalog_rag.json"
 LOCAL_CHROMA_DIR = ROOT_DIR / ".chroma"
 
 

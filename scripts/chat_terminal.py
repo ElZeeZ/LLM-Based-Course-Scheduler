@@ -11,12 +11,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.agent.langchain_agent import AcademicAgent
+from app.agent.preferences import DEFAULT_MAX_CREDITS
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Chat with the academic course scheduler in the terminal.")
     parser.add_argument("message", nargs="*", help="Optional one-shot message. If omitted, starts interactive chat.")
-    parser.add_argument("--max-credits", type=float, default=15)
+    parser.add_argument("--max-credits", type=float, default=DEFAULT_MAX_CREDITS)
     parser.add_argument("--completed-course", action="append", default=[], help="Completed course code. Can repeat.")
     parser.add_argument("--show-data", action="store_true", help="Print structured data returned by the agent.")
     args = parser.parse_args()
@@ -34,7 +35,7 @@ def main() -> None:
         return
 
     print("Course Scheduler Chat")
-    print("Type 'exit' or 'quit' to stop.")
+    print("Type 'exit' or 'quit' to stop. Use '/reset' to clear memory and '/history' to view it.")
     while True:
         try:
             message = input("\nYou: ").strip()
@@ -43,6 +44,13 @@ def main() -> None:
             return
         if message.lower() in {"exit", "quit"}:
             return
+        if message == "/reset":
+            agent.reset_memory()
+            print("\nAssistant:\nMemory cleared for this terminal session.")
+            continue
+        if message == "/history":
+            _print_history(agent.memory_snapshot())
+            continue
         if not message:
             continue
         result = agent.run(
@@ -58,6 +66,17 @@ def _print_response(result: dict[str, Any], *, show_data: bool) -> None:
     if show_data and result.get("data") is not None:
         print("\nData:")
         print(json.dumps(result["data"], indent=2, ensure_ascii=False, default=str))
+
+
+def _print_history(messages: list[dict[str, str]]) -> None:
+    if not messages:
+        print("\nAssistant:\nNo memory stored yet.")
+        return
+    print("\nMemory:")
+    for index, item in enumerate(messages, start=1):
+        role = item.get("role", "unknown").title()
+        content = item.get("content", "")
+        print(f"{index}. {role}: {content[:500]}")
 
 
 if __name__ == "__main__":

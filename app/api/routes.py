@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.agent.preferences import extract_max_credits
 from app.agent.langchain_agent import AcademicAgent
 from app.llm.gemini_client import generate_schedule_explanation
 from app.models.request_models import ChatRequest, GenerateScheduleRequest, SearchCoursesRequest
@@ -11,7 +12,7 @@ from app.scheduler.optimizer import generate_optimal_schedules
 
 
 router = APIRouter()
-agent = AcademicAgent()
+agents: dict[str, AcademicAgent] = {}
 
 
 @router.get("/")
@@ -33,7 +34,7 @@ def generate_schedule(request: GenerateScheduleRequest) -> ScheduleResponse:
     courses = retrieve_relevant_courses(request.query, request.top_k, unique_courses=False)
     generated = generate_optimal_schedules(
         courses,
-        max_credits=request.max_credits,
+        max_credits=extract_max_credits(request.query, request.max_credits),
         completed_courses=request.completed_courses,
         preferred_days=request.preferred_days,
     )
@@ -50,9 +51,19 @@ def generate_schedule(request: GenerateScheduleRequest) -> ScheduleResponse:
 
 @router.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
+    agent = _get_session_agent(request.session_id)
+    if request.reset_memory:
+        agent.reset_memory()
     result = agent.run(
         request.message,
         max_credits=request.max_credits,
         completed_courses=request.completed_courses,
     )
     return ChatResponse(response=result["response"], data=result.get("data"))
+
+
+def _get_session_agent(session_id: str) -> AcademicAgent:
+    normalized = session_id.strip() or "default"
+    if normalized not in agents:
+        agents[normalized] = AcademicAgent()
+    return agents[normalized]

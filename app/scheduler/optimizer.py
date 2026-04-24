@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.agent.preferences import DEFAULT_MAX_CREDITS
 from app.scheduler.constraints import (
     check_schedule_conflicts,
     normalize_course_code,
@@ -14,7 +15,7 @@ from app.scheduler.scoring import score_course, score_schedule
 def generate_optimal_schedules(
     candidate_courses: list[dict[str, Any]],
     *,
-    max_credits: float = 15,
+    max_credits: float = DEFAULT_MAX_CREDITS,
     completed_courses: list[str] | None = None,
     preferred_days: list[str] | None = None,
     limit: int = 3,

@@ -111,14 +111,19 @@ def normalize_course_record(record: dict[str, Any], index: int) -> dict[str, Any
     parsed = parse_compact_course_name(first_value(record, "course_name", "name", "title") or "")
     days, start_time, end_time = parse_meeting_time(first_value(record, "time", "meeting_time", "schedule"))
 
-    course_code = first_value(record, "course_code", "code", "id") or parsed.get("course_code") or f"COURSE-{index}"
+    course_code = (
+        first_value(record, "course_code", "course_id", "code", "id")
+        or parsed.get("course_code")
+        or f"COURSE-{index}"
+    )
     course_name = first_value(record, "course_name", "name", "title") or parsed.get("course_name") or course_code
     return {
         "course_code": normalize_code(course_code),
         "course_name": parsed.get("course_title") or strip_section_from_name(str(course_name)),
         "description": first_value(record, "description", "course_description", "desc") or "",
         "credits": parse_credits(first_value(record, "credits", "credit_hours")),
-        "department": first_value(record, "department", "subject") or infer_department(course_code),
+        "department": first_value(record, "department", "department_code", "subject") or infer_department(course_code),
+        "department_name": first_value(record, "department_name", "department_title") or "",
         "prerequisites": normalize_prerequisites(first_value(record, "prerequisites", "prerequisite", "prereq")),
         "instructor": first_value(record, "instructor", "faculty", "teacher") or "",
         "days": days,
@@ -155,24 +160,24 @@ def extract_sections(record: dict[str, Any]) -> list[dict[str, Any]]:
 
 def build_document(course: dict[str, Any], fallback_id: str) -> dict[str, Any]:
     metadata = normalize_metadata(course)
-    document = "\n".join(
-        [
-            f"Course Code: {metadata['course_code']}",
-            f"Course Name: {metadata['course_name']}",
-            f"Description: {metadata['description']}",
-            f"Credits: {metadata['credits']}",
-            f"Department: {metadata['department']}",
-            f"Prerequisites: {metadata['prerequisites']}",
-            f"Instructor: {metadata['instructor']}",
-            f"Days: {metadata['days']}",
-            f"Start Time: {metadata['start_time']}",
-            f"End Time: {metadata['end_time']}",
-            f"Semester: {metadata['semester']}",
-            f"Section: {metadata['section']}",
-            f"Location: {metadata['location']}",
-            f"CRN: {metadata['crn']}",
-        ]
-    )
+    fields = [
+        ("Course Code", metadata["course_code"]),
+        ("Course Name", metadata["course_name"]),
+        ("Description", metadata["description"]),
+        ("Department", metadata["department"]),
+        ("Department Name", metadata["department_name"]),
+        ("Credits", metadata["credits"] if metadata["credits"] else ""),
+        ("Prerequisites", metadata["prerequisites"]),
+        ("Instructor", metadata["instructor"]),
+        ("Days", metadata["days"]),
+        ("Start Time", metadata["start_time"]),
+        ("End Time", metadata["end_time"]),
+        ("Semester", metadata["semester"]),
+        ("Section", metadata["section"]),
+        ("Location", metadata["location"]),
+        ("CRN", metadata["crn"]),
+    ]
+    document = "\n".join(f"{label}: {value}" for label, value in fields if value not in ("", None))
     return {
         "id": stable_document_id(metadata, fallback_id),
         "document": truncate_document(document),
@@ -194,6 +199,7 @@ def normalize_metadata(course: dict[str, Any]) -> dict[str, Any]:
         "description": str(course.get("description") or ""),
         "credits": float(course.get("credits") or 0),
         "department": str(course.get("department") or ""),
+        "department_name": str(course.get("department_name") or ""),
         "semester": str(course.get("semester") or ""),
         "section": str(course.get("section") or ""),
         "instructor": str(course.get("instructor") or ""),
@@ -247,9 +253,9 @@ def first_value(record: dict[str, Any], *keys: str) -> Any:
 
 def parse_credits(value: Any) -> float:
     if value in (None, ""):
-        return 3.0
+        return 0.0
     match = re.search(r"\d+(?:\.\d+)?", str(value))
-    return float(match.group(0)) if match else 3.0
+    return float(match.group(0)) if match else 0.0
 
 
 def normalize_prerequisites(value: Any) -> list[str]:

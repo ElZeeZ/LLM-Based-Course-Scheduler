@@ -5,6 +5,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from app.agent.preferences import extract_max_credits
 from app.rag.retriever import retrieve_relevant_courses
 from app.scheduler.constraints import check_schedule_conflicts
 from app.scheduler.optimizer import generate_optimal_schedules
@@ -21,7 +22,7 @@ def course_search_tool(query: str) -> str:
 def schedule_generator_tool(request: str) -> str:
     """Generate a deterministic non-conflicting schedule for an academic request."""
     courses = retrieve_relevant_courses(request, top_k=40, unique_courses=False)
-    schedule = generate_optimal_schedules(courses, max_credits=_extract_max_credits(request))
+    schedule = generate_optimal_schedules(courses, max_credits=extract_max_credits(request))
     return json.dumps(schedule, ensure_ascii=False)
 
 
@@ -37,10 +38,3 @@ def conflict_checker_tool(schedule_json: str) -> str:
 
 
 TOOLS = [course_search_tool, schedule_generator_tool, conflict_checker_tool]
-
-
-def _extract_max_credits(text: str) -> float:
-    import re
-
-    match = re.search(r"(\d+(?:\.\d+)?)\s*[- ]?credit", text, re.IGNORECASE)
-    return float(match.group(1)) if match else 15.0
