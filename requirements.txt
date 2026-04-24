@@ -1,0 +1,31 @@
+# Backend
+fastapi
+uvicorn
+
+# Environment
+python-dotenv
+
+# Data handling
+pandas
+
+# RAG framework
+langchain
+langchain-core
+
+# Gemini integration
+google-genai
+langchain-google-genai
+
+# OpenAI fallback
+openai
+langchain-openai
+
+# Vector DB
+chromadb>=1.5.8
+
+# Validation
+pydantic
+
+# Utils
+rapidfuzz
+httpx
