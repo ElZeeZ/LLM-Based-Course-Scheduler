@@ -1,48 +1,51 @@
-# LLM-Based Course Scheduler
+# LLM-Based-Course-Scheduler
 
-## Overview
+AI academic assistant for course discovery and schedule planning.
 
-An LLM-based assistant that helps university students with course scheduling and selection using course data from LAU.
+## Current Architecture
 
----
+The project now separates semantic course discovery from schedule construction.
 
-## Features
+* **Vector DB / RAG:** `lau_catalog_rag.json` is embedded into Chroma Cloud collection `course_embeddings`. It is used for course-name and course-description search.
+* **Embeddings:** Qwen `text-embedding-v4` at 2048 dimensions.
+* **Reranking:** Qwen `qwen3-rerank` reranks Chroma candidates and returns the best courses.
+* **LLM agent:** Gemini 2.5 Flash is used for LangChain agent reasoning, schedule-request handling, and explanation.
+* **Scheduling data:** timings, sections, credits, and prerequisites should come from a relational database later. The vector DB should not be treated as the source of truth for schedule constraints.
 
-### Schedule Generation
-
-* Input: desired courses + constraints (time, days, preferences)
-* Output: optimized, conflict-free schedule
-
-### Course Recommendation
-
-* Input: eligible courses
-* Output: balanced and optimized course selection
-
-### Chroma Cloud Search
-
-Course retrieval uses Chroma Cloud collections with hybrid dense + sparse search:
-
-* Dense embeddings: Chroma Cloud Qwen (`Qwen/Qwen3-Embedding-0.6B`)
-* Sparse embeddings: Chroma Cloud Splade (`prithivida/Splade_PP_en_v1`)
-* Ranking: Reciprocal Rank Fusion (RRF), weighted 70% dense and 30% sparse by default
-* Deduplication: `GroupBy` on `source_document_id`, with `chunk_index` metadata for traceability
-* Chunking: line-based chunks under Chroma's 16 KiB document limit
-
----
-
-## Structure
+## Project Structure
 
 ```text
-.
-|-- src/      # core logic
-|-- scripts/  # migration and maintenance commands
-|-- ui/       # interface
-|-- data/     # datasets
+LLM-Based-Course-Scheduler/
+|-- app/
+|   |-- api/              # FastAPI routes
+|   |-- agent/            # LangChain agent and tools
+|   |-- llm/              # Gemini client
+|   |-- models/           # Pydantic request/response models
+|   |-- rag/              # Chroma, Qwen embeddings, rerank, retrieval, ingestion
+|   |-- scheduler/        # deterministic schedule constraints and optimizer
+|   |-- config.py
+|   `-- main.py
+|-- scripts/
+|   |-- ingest_courses.py
+|   |-- chat_terminal.py
+|   `-- migrate_to_chroma_cloud.py
+|-- tests/
+|-- lau_catalog_rag.json  # active catalog source for RAG
+|-- .env.example
+|-- requirements.txt
+`-- README.md
 ```
 
----
+The older `src/` directory is legacy scaffold and should not receive new application code.
 
-## Chroma Cloud Setup
+## Setup
+
+Create and activate a virtual environment:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate
+```
 
 Install dependencies:
 
@@ -50,36 +53,160 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Create a `.env` file with:
+Create `.env` from `.env.example`:
 
 ```env
+GEMINI_API_KEY=
+QWEN_API_KEY=
+QWEN_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+QWEN_EMBEDDING_MODEL=text-embedding-v4
+QWEN_EMBEDDING_DIMENSION=2048
+QWEN_RERANK_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-api/v1
+QWEN_RERANK_MODEL=qwen3-rerank
+CHROMA_API_KEY=
+CHROMA_TENANT=
+CHROMA_DATABASE=
 CHROMA_HOST=api.trychroma.com
-CHROMA_API_KEY=YOUR_CHROMA_API_KEY
-CHROMA_TENANT=51335609-8555-49e9-8762-830d64e37505
-CHROMA_DATABASE=LLM-Based-Course-Scheduler
-CHROMA_COLLECTION_PREFIX=course-catalog
+CHROMA_COLLECTION=course_embeddings
 ```
 
-Migrate existing course data:
+Keep `.env` private. Do not commit API keys.
+
+## Chroma Ingestion
+
+The active RAG source is:
+
+```text
+lau_catalog_rag.json
+```
+
+Validate loading without writing:
 
 ```powershell
-python scripts/migrate_to_chroma_cloud.py data/courses.json --text-field description --id-field course_code --organization-id lau
+.\.venv\Scripts\python.exe -B scripts\ingest_courses.py --dry-run
 ```
 
-Supported import formats are `.json`, `.jsonl`, and `.csv`. Collections are sharded by `--organization-id` or `--user-id`, so mutually exclusive data does not share a collection.
+Reset `course_embeddings` and upload fresh Qwen vectors:
 
-Search from Python:
-
-```python
-from src.rag.chroma_cloud import ChromaCloudSearch
-
-search = ChromaCloudSearch()
-hits = search.search("computer science courses with data structures", organization_id="lau")
+```powershell
+.\.venv\Scripts\python.exe -B scripts\ingest_courses.py --reset --batch-size 10
 ```
 
----
+The batch size is `10` because Qwen embeddings accept up to 10 texts per request. The current Chroma collection contains 2,442 embedded catalog records.
 
-## Notes
+## Retrieval Pipeline
 
-* API keys are handled via `.env` (not included in repo)
-* Project structure may evolve during development
+For course-description search:
+
+```text
+User query
+-> Qwen query embedding
+-> Chroma vector search over course_embeddings
+-> retrieve 30-40 candidates
+-> Qwen qwen3-rerank
+-> return best 10 courses
+```
+
+Returned results include `rerank_score`, `vector_relevance_score`, and `vector_rank`.
+
+Simple course-search prompts bypass the Gemini agent for speed and use this direct RAG path.
+
+## Terminal Chat
+
+Run a one-shot prompt:
+
+```powershell
+.\.venv\Scripts\python.exe -B scripts\chat_terminal.py "What courses are related to robotics and embedded systems?"
+```
+
+Start interactive chat:
+
+```powershell
+.\.venv\Scripts\python.exe -B scripts\chat_terminal.py
+```
+
+Simple search prompts return a deterministic reranked list. Schedule-like prompts still use the agent path. Interactive terminal sessions keep temporary in-memory chat history until the process exits. Use `/history` to inspect memory and `/reset` to clear it.
+
+## Run FastAPI
+
+```powershell
+uvicorn app.main:app --reload
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+## API Endpoints
+
+### `GET /`
+
+Health/root endpoint.
+
+### `POST /search-courses`
+
+Searches catalog descriptions through Qwen + Chroma + rerank.
+
+```json
+{
+  "query": "robotics and embedded systems",
+  "top_k": 10
+}
+```
+
+### `POST /chat`
+
+Routes simple search to direct RAG and schedule-like messages to the agent.
+
+```json
+{
+  "message": "What AI courses involve computer vision?",
+  "max_credits": 18,
+  "completed_courses": [],
+  "session_id": "student-demo",
+  "reset_memory": false
+}
+```
+
+`session_id` stores temporary in-process memory for that chat session. Memory is lost when the API process stops.
+
+If the student states a credit target in the message, for example "I want 15 credits", that value overrides `max_credits`. If no credit target is stated, the default is 18 credits.
+
+### `POST /generate-schedule`
+
+Current deterministic scheduler endpoint. This will need to be adapted once the relational DB is added for sections, timings, credits, and prerequisites.
+
+## LangChain Agent
+
+The agent is in `app/agent/langchain_agent.py`; tools are in `app/agent/tools.py`.
+
+Current tools:
+
+* `course_search_tool`
+* `schedule_generator_tool`
+* `conflict_checker_tool`
+
+Gemini handles agent reasoning and explanation. Hard scheduling constraints should remain deterministic and should use relational DB data once available.
+
+## Testing and Verification
+
+There is no full test suite yet. Use syntax checks before changes:
+
+```powershell
+.\.venv\Scripts\python.exe -B -m py_compile app\rag\retriever.py scripts\chat_terminal.py
+```
+
+For RAG changes, verify:
+
+```powershell
+.\.venv\Scripts\python.exe -B -c "from app.rag.ingest import get_course_collection; c=get_course_collection(); print(c.name); print(c.count())"
+```
+
+Expected collection:
+
+```text
+course_embeddings
+2442
+```
