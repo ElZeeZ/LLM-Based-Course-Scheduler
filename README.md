@@ -158,13 +158,11 @@ Searches catalog descriptions through Qwen + Chroma + rerank.
 
 ### `POST /chat`
 
-Routes simple search to direct RAG and schedule-like messages to the agent.
+Searches for relevant courses by name and description using direct RAG. Use this endpoint for chatbot course discovery, not schedule generation.
 
 ```json
 {
   "message": "What AI courses involve computer vision?",
-  "max_credits": 18,
-  "completed_courses": [],
   "session_id": "student-demo",
   "reset_memory": false
 }
@@ -172,11 +170,11 @@ Routes simple search to direct RAG and schedule-like messages to the agent.
 
 `session_id` stores temporary in-process memory for that chat session. Memory is lost when the API process stops.
 
-If the student states a credit target in the message, for example "I want 15 credits", that value overrides `max_credits`. If no credit target is stated, the default is 18 credits.
-
 ### `POST /generate-schedule`
 
 Current deterministic scheduler endpoint. This will need to be adapted once the relational DB is added for sections, timings, credits, and prerequisites.
+
+Use this endpoint when the user asks to generate a schedule. If the student states a credit target in the query, for example "I want 15 credits", that value overrides `max_credits`. If no credit target is stated, the default is 18 credits.
 
 ## LangChain Agent
 

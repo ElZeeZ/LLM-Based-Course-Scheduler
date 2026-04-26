@@ -54,11 +54,7 @@ def chat(request: ChatRequest) -> ChatResponse:
     agent = _get_session_agent(request.session_id)
     if request.reset_memory:
         agent.reset_memory()
-    result = agent.run(
-        request.message,
-        max_credits=request.max_credits,
-        completed_courses=request.completed_courses,
-    )
+    result = agent.search_courses(request.message)
     return ChatResponse(response=result["response"], data=result.get("data"))
 
 
