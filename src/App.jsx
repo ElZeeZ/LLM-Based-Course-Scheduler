@@ -65,6 +65,25 @@ const COURSE_COLORS = {
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:5000").replace(/\/$/, "");
 
+async function getApiData(path, queryParams = {}) {
+  const url = new URL(`${API_BASE_URL}${path}`);
+
+  Object.entries(queryParams).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      url.searchParams.set(key, value);
+    }
+  });
+
+  const response = await fetch(url);
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || data.success === false) {
+    throw new Error(data.message || "Unable to load data.");
+  }
+
+  return data;
+}
+
 async function postAuthRequest(path, payload) {
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -92,28 +111,66 @@ async function postAuthRequest(path, payload) {
   }
 }
 
+function parseTimeParts(time) {
+  const rawTime = String(time || "").trim();
+  const match = rawTime.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const meridiem = match[3]?.toUpperCase();
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return null;
+  }
+
+  if (meridiem === "PM" && hours !== 12) {
+    hours += 12;
+  }
+
+  if (meridiem === "AM" && hours === 12) {
+    hours = 0;
+  }
+
+  return { hours, minutes };
+}
+
 function timeToMinutes(time) {
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
+  const parsedTime = parseTimeParts(time);
+  return parsedTime ? parsedTime.hours * 60 + parsedTime.minutes : Number.NaN;
 }
 
 function formatTime(time) {
-  const [hours, minutes] = time.split(":").map(Number);
+  const parsedTime = parseTimeParts(time);
+
+  if (!parsedTime) {
+    return "N/A";
+  }
+
+  const { hours, minutes } = parsedTime;
   const suffix = hours >= 12 ? "PM" : "AM";
   const displayHours = hours % 12 || 12;
   return `${displayHours}:${String(minutes).padStart(2, "0")} ${suffix}`;
 }
 
 function formatTimeRange(course) {
+  if (course.time && course.time !== "N/A") {
+    return course.time;
+  }
+
   return `${formatTime(course.start_time)} - ${formatTime(course.end_time)}`;
 }
 
 function formatDays(days) {
-  return days.map((day) => DAY_SHORT_LABELS[day]).join(" / ");
+  const normalizedDays = getNormalizedSectionDays(days);
+  return normalizedDays.length > 0 ? normalizedDays.map((day) => DAY_SHORT_LABELS[day]).join(" / ") : "N/A";
 }
 
 function normalizeSearchValue(value) {
-  return value.toLowerCase().replace(/\s+/g, "");
+  return String(value || "").toLowerCase().replace(/\s+/g, "");
 }
 
 function normalizeDayName(day) {
@@ -125,10 +182,14 @@ function normalizeDayName(day) {
   if (normalizedDay.startsWith("thu")) return "Thursday";
   if (normalizedDay.startsWith("fri")) return "Friday";
 
-  return day;
+  return "";
 }
 
 function getNormalizedSectionDays(days) {
+  if (!days) {
+    return [];
+  }
+
   const dayParts = Array.isArray(days)
     ? days
     : String(days).split(/[\/,]/).map((day) => day.trim());
@@ -152,6 +213,93 @@ function sectionMatchesDayFilters(section, selectedDays) {
   return sectionDays.length > 0 && sectionDays.every((day) => selectedDaySet.has(day));
 }
 
+function safeText(value, fallback = "N/A") {
+  if (value === null || value === undefined || String(value).trim() === "") {
+    return fallback;
+  }
+
+  return String(value).trim();
+}
+
+function normalizeCredits(value) {
+  const numericCredits = Number(value);
+  return Number.isFinite(numericCredits) ? numericCredits : 0;
+}
+
+function normalizePrerequisites(value) {
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value.map((item) => safeText(item)).filter(Boolean) : ["N/A"];
+  }
+
+  const prerequisiteText = safeText(value);
+  return prerequisiteText === "N/A"
+    ? ["N/A"]
+    : prerequisiteText.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function normalizeApiSection(section) {
+  const courseCode = safeText(section.course_code);
+  const dayNames = Array.isArray(section.day_names)
+    ? section.day_names
+    : getNormalizedSectionDays(section.days);
+  const startTime = safeText(section.start_time_value || section.start_time, "");
+  const endTime = safeText(section.end_time_value || section.end_time, "");
+  const displayStartTime = safeText(section.start_time);
+  const displayEndTime = safeText(section.end_time);
+  const time = section.time && section.time !== "N/A"
+    ? section.time
+    : `${formatTime(displayStartTime || startTime)} - ${formatTime(displayEndTime || endTime)}`;
+
+  return {
+    id: safeText(section.id || section.crn || `${courseCode}-${section.section}`),
+    course_id: safeText(section.course_id || normalizeSearchValue(courseCode)),
+    course_code: courseCode,
+    course_name: safeText(section.course_name),
+    credits: normalizeCredits(section.credits),
+    creditsLabel: Number.isFinite(Number(section.credits)) ? `${Number(section.credits)} credits` : "N/A credits",
+    crn: safeText(section.crn),
+    section: safeText(section.section),
+    semester: safeText(section.semester),
+    instructor: safeText(section.instructor),
+    capacity: safeText(section.capacity),
+    enrolled: safeText(section.enrolled),
+    campus: safeText(section.campus),
+    campuses: Array.isArray(section.campuses) ? section.campuses : [safeText(section.campus)],
+    prerequisites: normalizePrerequisites(section.prerequisites),
+    description: safeText(section.description),
+    days: dayNames,
+    start_time: startTime || displayStartTime,
+    end_time: endTime || displayEndTime,
+    time,
+    room: safeText(section.room),
+    color: section.color || "indigo"
+  };
+}
+
+function normalizeApiCatalogCourse(course) {
+  const courseCode = safeText(course.course_code);
+  const campuses = Array.isArray(course.campuses)
+    ? course.campuses.filter((campus) => safeText(campus) !== "N/A")
+    : [];
+
+  return {
+    id: safeText(course.id || course.course_id || normalizeSearchValue(courseCode)),
+    course_id: safeText(course.course_id || course.id || normalizeSearchValue(courseCode)),
+    course_code: courseCode,
+    course_name: safeText(course.course_name),
+    credits: normalizeCredits(course.credits),
+    campuses,
+    campus: campuses.length > 0 ? campuses.join(" / ") : "N/A",
+    prerequisites: normalizePrerequisites(course.prerequisites),
+    description: safeText(course.description),
+    color: course.color || "indigo"
+  };
+}
+
+function formatCredits(course) {
+  return course.creditsLabel || `${course.credits} credits`;
+}
+
 function getCoursePalette(colorName) {
   return COURSE_COLORS[colorName] || COURSE_COLORS.indigo;
 }
@@ -161,6 +309,10 @@ function hasTimeOverlap(firstCourse, secondCourse) {
   const firstEnd = timeToMinutes(firstCourse.end_time);
   const secondStart = timeToMinutes(secondCourse.start_time);
   const secondEnd = timeToMinutes(secondCourse.end_time);
+
+  if (![firstStart, firstEnd, secondStart, secondEnd].every(Number.isFinite)) {
+    return false;
+  }
 
   return firstStart < secondEnd && secondStart < firstEnd;
 }
@@ -196,6 +348,10 @@ function detectScheduleConflicts(courses) {
 function getWeeklyHours(courses) {
   const totalMinutes = courses.reduce((sum, course) => {
     const duration = timeToMinutes(course.end_time) - timeToMinutes(course.start_time);
+    if (!Number.isFinite(duration)) {
+      return sum;
+    }
+
     return sum + duration * course.days.length;
   }, 0);
 
@@ -209,6 +365,13 @@ function getTimetableInstances(courses, conflictCourseIds) {
   }, {});
 
   courses.forEach((course) => {
+    const startMinutes = timeToMinutes(course.start_time);
+    const endMinutes = timeToMinutes(course.end_time);
+
+    if (!Number.isFinite(startMinutes) || !Number.isFinite(endMinutes)) {
+      return;
+    }
+
     course.days.forEach((day) => {
       if (instancesByDay[day]) {
         instancesByDay[day].push({
@@ -216,8 +379,8 @@ function getTimetableInstances(courses, conflictCourseIds) {
           instanceId: `${course.id}-${day}`,
           day,
           dayIndex: WEEK_DAYS.indexOf(day),
-          startMinutes: timeToMinutes(course.start_time),
-          endMinutes: timeToMinutes(course.end_time),
+          startMinutes,
+          endMinutes,
           isConflict: conflictCourseIds.has(course.id)
         });
       }
@@ -587,66 +750,6 @@ const mockImportLogsAdmin = [
   }
 ];
 
-const availableSections = mockCourseSectionsTable.map((section) => {
-  const course = mockCoursesTable.find((courseRecord) => courseRecord.course_id === section.course_code);
-
-  return {
-    id: section.id,
-    course_id: course.course_id,
-    course_code: course.course_code,
-    course_name: course.title,
-    credits: course.credits,
-    crn: section.CRN,
-    section: section.section_number,
-    semester: section.semester,
-    instructor: section.instructor_name,
-    capacity: section.capacity,
-    enrolled: section.actual_enrolled,
-    campus: section.campus,
-    campuses: [section.campus],
-    prerequisites: course.prerequisite.split(",").map((item) => item.trim()),
-    description: course.description,
-    days: section.days,
-    start_time: section.start_time,
-    end_time: section.end_time,
-    room: section.room,
-    color: section.color
-  };
-});
-
-const courseCatalog = mockCoursesTable.map((course) => {
-  const sections = availableSections.filter((section) => section.course_id === course.course_id);
-  const campuses = Array.from(new Set(sections.map((section) => section.campus))).sort();
-  const sampleSection = sections[0];
-
-  return {
-    id: course.course_id,
-    course_id: course.course_id,
-    course_code: course.course_code,
-    course_name: course.title,
-    credits: course.credits,
-    campuses,
-    campus: campuses.join(" / "),
-    prerequisites: course.prerequisite.split(",").map((item) => item.trim()),
-    description: course.description,
-    color: sampleSection?.color || "indigo"
-  };
-});
-
-const initialSelectedCourseIds = [
-  "section-coe522-01",
-  "section-coe424-01",
-  "section-coe321-01",
-  "section-mth304-01"
-];
-
-const aiRecommendedCourseIds = [
-  "section-coe522-01",
-  "section-coe321-01",
-  "section-coe444-01",
-  "section-coe430-01"
-];
-
 const initialAiMessages = [
   {
     id: "assistant-welcome",
@@ -674,29 +777,33 @@ function createAiPlanningSelection(course, campus) {
   };
 }
 
-function resolveAiPlanningSelectionsToSections(aiPlanningCourses) {
+async function resolveAiPlanningSelectionsToSections(aiPlanningCourses) {
   const selectedSectionIds = new Set();
+  const resolvedSections = [];
 
-  return aiPlanningCourses.reduce((resolvedSections, planningCourse) => {
-    const matchingSection = availableSections.find((section) => {
-      return (
-        section.course_id === planningCourse.course_id &&
-        section.campus === planningCourse.campus &&
-        !selectedSectionIds.has(section.id)
-      );
+  for (const planningCourse of aiPlanningCourses) {
+    const sections = await getApiData("/api/courses/sections", {
+      search: planningCourse.course_code,
+      campus: planningCourse.campus,
+      limit: 20
     });
+    const matchingSection = (Array.isArray(sections) ? sections : [])
+      .map(normalizeApiSection)
+      .find((section) => {
+        return (
+          section.course_code === planningCourse.course_code &&
+          section.campus === planningCourse.campus &&
+          !selectedSectionIds.has(section.id)
+        );
+      });
 
     if (matchingSection) {
       selectedSectionIds.add(matchingSection.id);
       resolvedSections.push(matchingSection);
     }
+  }
 
-    return resolvedSections;
-  }, []);
-}
-
-function getDefaultAiRecommendedSections() {
-  return availableSections.filter((section) => aiRecommendedCourseIds.includes(section.id));
+  return resolvedSections;
 }
 
 /* =========================
@@ -710,18 +817,14 @@ export default function App() {
   const [registeredLoginEmail, setRegisteredLoginEmail] = useState("");
   const [authSuccessMessage, setAuthSuccessMessage] = useState("");
   const [activeView, setActiveView] = useState("dashboard");
-  const [selectedScheduleCourseIds, setSelectedScheduleCourseIds] = useState(initialSelectedCourseIds);
+  const [selectedScheduleCourses, setSelectedScheduleCourses] = useState([]);
   const [aiSelectedCourses, setAiSelectedCourses] = useState([]);
   const [aiMessages, setAiMessages] = useState(initialAiMessages);
   const [aiInputValue, setAiInputValue] = useState("");
 
-  const selectedScheduleCourses = useMemo(() => {
-    return availableSections.filter((course) => selectedScheduleCourseIds.includes(course.id));
-  }, [selectedScheduleCourseIds]);
-
   const selectedScheduleCourseIdSet = useMemo(() => {
-    return new Set(selectedScheduleCourseIds);
-  }, [selectedScheduleCourseIds]);
+    return new Set(selectedScheduleCourses.map((course) => course.id));
+  }, [selectedScheduleCourses]);
 
   const aiSelectedCourseIdSet = useMemo(() => {
     return new Set(aiSelectedCourses.map((course) => course.id));
@@ -774,9 +877,7 @@ export default function App() {
     setAiInputValue("");
   }
 
-  function handleAddAiPlanningCourse(courseId, campus) {
-    const course = courseCatalog.find((courseRecord) => courseRecord.course_id === courseId);
-
+  function handleAddAiPlanningCourse(course, campus) {
     if (!course) {
       return;
     }
@@ -798,22 +899,22 @@ export default function App() {
     setAiSelectedCourses((currentCourses) => currentCourses.filter((course) => course.id !== selectionId));
   }
 
-  function handleAddScheduleCourse(courseId) {
-    setSelectedScheduleCourseIds((currentIds) => {
-      if (currentIds.includes(courseId)) {
-        return currentIds;
+  function handleAddScheduleCourse(course) {
+    setSelectedScheduleCourses((currentCourses) => {
+      if (currentCourses.some((selectedCourse) => selectedCourse.id === course.id)) {
+        return currentCourses;
       }
 
-      return [...currentIds, courseId];
+      return [...currentCourses, course];
     });
   }
 
   function handleRemoveCourse(courseId) {
-    setSelectedScheduleCourseIds((currentIds) => currentIds.filter((id) => id !== courseId));
+    setSelectedScheduleCourses((currentCourses) => currentCourses.filter((course) => course.id !== courseId));
   }
 
   function handleApplyAiSchedule(courses) {
-    setSelectedScheduleCourseIds(courses.map((course) => course.id));
+    setSelectedScheduleCourses(courses);
     setActiveView("dashboard");
   }
 
@@ -1469,7 +1570,7 @@ function SelectedCourseCard({ course, onRemoveCourse }) {
       </div>
 
       <div className="detail-grid">
-        <span><BookOpen size={14} /> {course.credits} credits</span>
+        <span><BookOpen size={14} /> {formatCredits(course)}</span>
         <span><User size={14} /> {course.instructor}</span>
         <span><Building2 size={14} /> {course.campus}</span>
         <span><MapPin size={14} /> {course.room}</span>
@@ -1493,22 +1594,40 @@ function AvailableCoursesPanel({ aiSelectedCourseIdSet, onAddCourse }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [campusFilter, setCampusFilter] = useState("All campuses");
   const [openCampusMenuCourseId, setOpenCampusMenuCourseId] = useState(null);
+  const [courseCatalog, setCourseCatalog] = useState([]);
+  const [isLoadingCourses, setIsLoadingCourses] = useState(false);
+  const [courseErrorMessage, setCourseErrorMessage] = useState("");
 
-  const filteredCourses = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    const compactQuery = normalizeSearchValue(query);
+  useEffect(() => {
+    const trimmedSearch = searchQuery.trim();
 
-    return courseCatalog.filter((course) => {
-      const matchesCampus = campusFilter === "All campuses" || course.campuses.includes(campusFilter);
-      const courseName = course.course_name.toLowerCase();
-      const matchesSearch =
-        !query ||
-        normalizeSearchValue(course.course_code).includes(compactQuery) ||
-        courseName.includes(query) ||
-        normalizeSearchValue(courseName).includes(compactQuery);
+    if (!trimmedSearch) {
+      setCourseCatalog([]);
+      setCourseErrorMessage("");
+      setIsLoadingCourses(false);
+      return undefined;
+    }
 
-      return matchesCampus && matchesSearch;
-    });
+    const requestId = window.setTimeout(async () => {
+      setIsLoadingCourses(true);
+      setCourseErrorMessage("");
+
+      try {
+        const catalog = await getApiData("/api/courses/catalog", {
+          search: trimmedSearch,
+          campus: campusFilter === "All campuses" ? "" : campusFilter,
+          limit: 100
+        });
+        setCourseCatalog((Array.isArray(catalog) ? catalog : []).map(normalizeApiCatalogCourse));
+      } catch (error) {
+        setCourseCatalog([]);
+        setCourseErrorMessage(error.message || "Unable to load courses.");
+      } finally {
+        setIsLoadingCourses(false);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(requestId);
   }, [campusFilter, searchQuery]);
 
   return (
@@ -1518,7 +1637,7 @@ function AvailableCoursesPanel({ aiSelectedCourseIdSet, onAddCourse }) {
           <p className="eyebrow">Available courses</p>
           <h2>Course Catalog</h2>
         </div>
-        <span className="count-pill muted">{filteredCourses.length}</span>
+        <span className="count-pill muted">{courseCatalog.length}</span>
       </div>
 
       <div className="catalog-controls">
@@ -1548,7 +1667,7 @@ function AvailableCoursesPanel({ aiSelectedCourseIdSet, onAddCourse }) {
       </div>
 
       <div className="available-list">
-        {filteredCourses.map((course) => {
+        {courseCatalog.map((course) => {
           const palette = getCoursePalette(course.color);
           const selectedCampuses = course.campuses.filter((campus) => {
             return aiSelectedCourseIdSet.has(getAiPlanningSelectionId(course.course_id, campus));
@@ -1558,7 +1677,7 @@ function AvailableCoursesPanel({ aiSelectedCourseIdSet, onAddCourse }) {
 
           function handleAddClick() {
             if (course.campuses.length === 1) {
-              onAddCourse(course.course_id, course.campuses[0]);
+              onAddCourse(course, course.campuses[0]);
               return;
             }
 
@@ -1601,7 +1720,7 @@ function AvailableCoursesPanel({ aiSelectedCourseIdSet, onAddCourse }) {
                           disabled={isCampusSelected}
                           key={campus}
                           onClick={() => {
-                            onAddCourse(course.course_id, campus);
+                            onAddCourse(course, campus);
                             setOpenCampusMenuCourseId(null);
                           }}
                         >
@@ -1617,10 +1736,24 @@ function AvailableCoursesPanel({ aiSelectedCourseIdSet, onAddCourse }) {
           );
         })}
 
-        {filteredCourses.length === 0 && (
+        {isLoadingCourses && (
           <div className="empty-side-state">
             <Search size={22} />
-            <p>No courses found for this search and campus.</p>
+            <p>Loading courses...</p>
+          </div>
+        )}
+
+        {!isLoadingCourses && courseErrorMessage && (
+          <div className="empty-side-state error-state">
+            <AlertTriangle size={22} />
+            <p>{courseErrorMessage}</p>
+          </div>
+        )}
+
+        {!isLoadingCourses && !courseErrorMessage && courseCatalog.length === 0 && (
+          <div className="empty-side-state">
+            <Search size={22} />
+            <p>{searchQuery.trim() ? "No courses found." : "Search by code or course name to view courses."}</p>
           </div>
         )}
       </div>
@@ -1630,51 +1763,44 @@ function AvailableCoursesPanel({ aiSelectedCourseIdSet, onAddCourse }) {
 
 function ManualSectionsPanel({ selectedCourseIdSet, onAddCourse }) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [campusPriority, setCampusPriority] = useState("Beirut");
+  const [campusFilter, setCampusFilter] = useState("Beirut");
   const [selectedDayFilters, setSelectedDayFilters] = useState([]);
+  const [availableSections, setAvailableSections] = useState([]);
+  const [isLoadingSections, setIsLoadingSections] = useState(false);
+  const [sectionErrorMessage, setSectionErrorMessage] = useState("");
 
-  const filteredSections = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    const compactQuery = normalizeSearchValue(query);
+  useEffect(() => {
+    const trimmedSearch = searchQuery.trim();
 
-    return [...availableSections]
-      .filter((course) => {
-        const courseName = course.course_name.toLowerCase();
-        const instructor = course.instructor.toLowerCase();
-        const crn = String(course.crn);
-        const matchesSearch =
-          !query ||
-          normalizeSearchValue(course.course_code).includes(compactQuery) ||
-          courseName.includes(query) ||
-          normalizeSearchValue(courseName).includes(compactQuery) ||
-          crn.includes(compactQuery) ||
-          instructor.includes(query);
+    if (!trimmedSearch) {
+      setAvailableSections([]);
+      setSectionErrorMessage("");
+      setIsLoadingSections(false);
+      return undefined;
+    }
 
-        return matchesSearch && sectionMatchesDayFilters(course, selectedDayFilters);
-      })
-      .sort((firstCourse, secondCourse) => {
-        const firstPriority = firstCourse.campus === campusPriority ? 0 : 1;
-        const secondPriority = secondCourse.campus === campusPriority ? 0 : 1;
+    const requestId = window.setTimeout(async () => {
+      setIsLoadingSections(true);
+      setSectionErrorMessage("");
 
-        if (firstPriority !== secondPriority) {
-          return firstPriority - secondPriority;
-        }
+      try {
+        const sections = await getApiData("/api/courses/sections", {
+          search: trimmedSearch,
+          days: selectedDayFilters.map((day) => DAY_SHORT_LABELS[day]).join(","),
+          campus: campusFilter,
+          limit: 50
+        });
+        setAvailableSections((Array.isArray(sections) ? sections : []).map(normalizeApiSection));
+      } catch (error) {
+        setAvailableSections([]);
+        setSectionErrorMessage(error.message || "Unable to load sections.");
+      } finally {
+        setIsLoadingSections(false);
+      }
+    }, 250);
 
-        if (selectedDayFilters.length > 1) {
-          const firstDayCount = getNormalizedSectionDays(firstCourse.days).length;
-          const secondDayCount = getNormalizedSectionDays(secondCourse.days).length;
-
-          if (firstDayCount !== secondDayCount) {
-            return secondDayCount - firstDayCount;
-          }
-        }
-
-        return (
-          firstCourse.course_code.localeCompare(secondCourse.course_code) ||
-          Number(firstCourse.section) - Number(secondCourse.section)
-        );
-      });
-  }, [campusPriority, searchQuery, selectedDayFilters]);
+    return () => window.clearTimeout(requestId);
+  }, [campusFilter, searchQuery, selectedDayFilters]);
 
   function toggleDayFilter(day) {
     setSelectedDayFilters((currentDays) => {
@@ -1693,7 +1819,7 @@ function ManualSectionsPanel({ selectedCourseIdSet, onAddCourse }) {
           <p className="eyebrow">Manual planning</p>
           <h2>All Sections</h2>
         </div>
-        <span className="count-pill muted">{filteredSections.length}</span>
+        <span className="count-pill muted">{availableSections.length}</span>
       </div>
 
       <p className="panel-helper-text">Search exact sections and add them directly to the final timetable.</p>
@@ -1707,15 +1833,15 @@ function ManualSectionsPanel({ selectedCourseIdSet, onAddCourse }) {
         />
       </label>
 
-      <div className="campus-priority-toggle" aria-label="Campus sort priority">
+      <div className="campus-priority-toggle" aria-label="Campus filter">
         {["Beirut", "Jbeil"].map((campus) => (
           <button
-            className={campusPriority === campus ? "active" : ""}
+            className={campusFilter === campus ? "active" : ""}
             type="button"
             key={campus}
-            onClick={() => setCampusPriority(campus)}
+            onClick={() => setCampusFilter(campus)}
           >
-            {campus} first
+            {campus}
           </button>
         ))}
       </div>
@@ -1734,7 +1860,7 @@ function ManualSectionsPanel({ selectedCourseIdSet, onAddCourse }) {
       </div>
 
       <div className="manual-section-list">
-        {filteredSections.map((course) => {
+        {availableSections.map((course) => {
           const isSelected = selectedCourseIdSet.has(course.id);
 
           return (
@@ -1747,10 +1873,31 @@ function ManualSectionsPanel({ selectedCourseIdSet, onAddCourse }) {
           );
         })}
 
-        {filteredSections.length === 0 && (
+        {!searchQuery.trim() && (
           <div className="empty-side-state">
             <Search size={22} />
-            <p>No sections found for this search.</p>
+            <p>Search CRN, course code, course name, or instructor to view available sections.</p>
+          </div>
+        )}
+
+        {searchQuery.trim() && isLoadingSections && (
+          <div className="empty-side-state">
+            <Search size={22} />
+            <p>Loading sections...</p>
+          </div>
+        )}
+
+        {searchQuery.trim() && !isLoadingSections && sectionErrorMessage && (
+          <div className="empty-side-state error-state">
+            <AlertTriangle size={22} />
+            <p>{sectionErrorMessage}</p>
+          </div>
+        )}
+
+        {searchQuery.trim() && !isLoadingSections && !sectionErrorMessage && availableSections.length === 0 && (
+          <div className="empty-side-state">
+            <Search size={22} />
+            <p>No sections found.</p>
           </div>
         )}
       </div>
@@ -1784,7 +1931,7 @@ function ManualSectionCard({ course, isSelected, onAddCourse }) {
       <button
         className={`icon-button add-course-button ${isSelected ? "is-selected" : ""}`}
         type="button"
-        onClick={() => onAddCourse(course.id)}
+        onClick={() => onAddCourse(course)}
         disabled={isSelected}
         aria-label={`Add ${course.course_code} section ${course.section}`}
       >
@@ -1825,6 +1972,7 @@ function AIChatPage({
   setAiInputValue
 }) {
   const chatThreadRef = useRef(null);
+  const [isAiResponding, setIsAiResponding] = useState(false);
 
   const selectedSummary = useMemo(() => {
     return {
@@ -1844,11 +1992,19 @@ function AIChatPage({
     }
   }, [aiMessages]);
 
-  function buildAssistantResponse(userText) {
+  async function buildAssistantResponse(userText) {
     const normalizedText = userText.toLowerCase();
-    const fallbackCourses = getDefaultAiRecommendedSections();
-    const resolvedAiSections = resolveAiPlanningSelectionsToSections(aiSelectedCourses);
-    const suggestedCourses = resolvedAiSections.length > 0 ? resolvedAiSections : fallbackCourses;
+    const resolvedAiSections = await resolveAiPlanningSelectionsToSections(aiSelectedCourses);
+    const suggestedCourses = resolvedAiSections.length > 0 ? resolvedAiSections : selectedCourses;
+
+    if (suggestedCourses.length === 0) {
+      return {
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        text: "Add courses from the catalog or your manual schedule first, then I can suggest a real section-based plan."
+      };
+    }
+
     const totalCredits = suggestedCourses.reduce((sum, course) => sum + course.credits, 0);
     const avoidsEarlyClasses = suggestedCourses.every((course) => timeToMinutes(course.start_time) >= 10 * 60);
     const avoidsFriday = suggestedCourses.every((course) => !course.days.includes("Friday"));
@@ -1862,7 +2018,7 @@ function AIChatPage({
     return {
       id: `assistant-${Date.now()}`,
       role: "assistant",
-      text: `I created a ${requestedCredits} schedule ${compactPhrase} using ${aiSelectedCourses.length > 0 ? "your AI planning course list" : "the recommended demo course set"}: ${suggestedCourses.length} courses, ${totalCredits} credits, ${conflictCount} conflicts, ${avoidsFriday ? "no Friday classes" : "some Friday meetings"}, and ${avoidsEarlyClasses ? "no classes before 10 AM" : "one early class to review"}.`,
+      text: `I created a ${requestedCredits} schedule ${compactPhrase} using ${aiSelectedCourses.length > 0 ? "your AI planning course list" : "your current selected sections"}: ${suggestedCourses.length} courses, ${totalCredits} credits, ${conflictCount} conflicts, ${avoidsFriday ? "no Friday classes" : "some Friday meetings"}, and ${avoidsEarlyClasses ? "no classes before 10 AM" : "one early class to review"}.`,
       suggestedCourses,
       scheduleMeta: {
         saved_name: "AI Balanced Fall Plan",
@@ -1873,10 +2029,10 @@ function AIChatPage({
     };
   }
 
-  function handleSend() {
+  async function handleSend() {
     const textToSend = aiInputValue.trim();
 
-    if (!textToSend) {
+    if (!textToSend || isAiResponding) {
       return;
     }
 
@@ -1886,10 +2042,18 @@ function AIChatPage({
       text: textToSend
     };
 
-    const assistantMessage = buildAssistantResponse(textToSend);
-
-    setAiMessages((currentMessages) => [...currentMessages, userMessage, assistantMessage]);
+    setAiMessages((currentMessages) => [...currentMessages, userMessage]);
     setAiInputValue("");
+    setIsAiResponding(true);
+
+    const assistantMessage = await buildAssistantResponse(textToSend).catch((error) => ({
+      id: `assistant-${Date.now()}`,
+      role: "assistant",
+      text: error.message || "I could not load matching sections from the course database right now."
+    }));
+
+    setAiMessages((currentMessages) => [...currentMessages, assistantMessage]);
+    setIsAiResponding(false);
   }
 
   return (
@@ -1947,9 +2111,14 @@ function AIChatPage({
               }}
               placeholder="Ask the AI to optimize credits, days, gaps, or conflicts..."
             />
-            <button className="primary-button compact-button" type="button" onClick={() => handleSend()}>
+            <button
+              className="primary-button compact-button"
+              type="button"
+              onClick={() => handleSend()}
+              disabled={isAiResponding}
+            >
               <Send size={17} />
-              Send
+              {isAiResponding ? "Thinking..." : "Send"}
             </button>
           </div>
         </section>

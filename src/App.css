@@ -1243,6 +1243,12 @@ button {
   font-weight: 800;
 }
 
+.empty-side-state.error-state {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
 .floating-ai-button {
   position: fixed;
   bottom: 24px;
