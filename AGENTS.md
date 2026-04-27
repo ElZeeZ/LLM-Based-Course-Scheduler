@@ -48,7 +48,7 @@ Rerank is mandatory. Returned courses may include `rerank_score`, `vector_releva
 
 ## Chatbot and Memory
 
-Simple course-search prompts bypass Gemini for speed. They use direct RAG and deterministic formatting.
+`POST /chat` is only for course discovery by name/description. It bypasses Gemini for speed and uses direct RAG plus deterministic formatting. Do not add schedule-only fields such as `max_credits` or `completed_courses` to `ChatRequest`.
 
 Schedule-like prompts are detected in `app/agent/langchain_agent.py` and routed through LangChain. Current tools are in `app/agent/tools.py`:
 
@@ -62,7 +62,7 @@ Session memory is temporary and in-process. `AcademicAgent` keeps recent turns f
 
 LangChain uses Gemini 2.5 Flash with the tool list above. The LLM may interpret user intent and choose tools, but deterministic Python must enforce constraints. If the agent fails, schedule requests fall back to direct retrieval plus deterministic scheduling.
 
-Credit handling is centralized in `app/agent/preferences.py`. If the student states a target such as `15 credits`, use that value. Otherwise default to 18 credits. Do not hard-code credit defaults elsewhere.
+Schedule generation belongs in `POST /generate-schedule` and the schedule agent/tools. Credit handling is centralized in `app/agent/preferences.py`. If the student states a target such as `15 credits`, use that value. Otherwise default to 18 credits. Do not hard-code credit defaults elsewhere.
 
 ## Scheduling Constraints
 

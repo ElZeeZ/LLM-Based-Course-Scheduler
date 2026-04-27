@@ -31,9 +31,7 @@ class AcademicAgent:
         completed_courses: list[str] | None = None,
     ) -> dict[str, Any]:
         if not SCHEDULE_INTENT_RE.search(message):
-            result = self._course_search_run(message)
-            self._remember(message, result["response"])
-            return result
+            return self.search_courses(message)
 
         try:
             agent = self._get_agent()
@@ -51,6 +49,11 @@ class AcademicAgent:
             )
             self._remember(message, result["response"])
             return result
+
+    def search_courses(self, message: str) -> dict[str, Any]:
+        result = self._course_search_run(message)
+        self._remember(message, result["response"])
+        return result
 
     def _get_agent(self) -> Any:
         if self._agent:
