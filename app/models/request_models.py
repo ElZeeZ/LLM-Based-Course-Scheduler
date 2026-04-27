@@ -23,7 +23,5 @@ class GenerateScheduleRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    max_credits: float = Field(default=DEFAULT_MAX_CREDITS, gt=0, le=24)
-    completed_courses: list[str] = Field(default_factory=list)
     session_id: str = Field(default="default", description="Temporary in-memory chat session identifier.")
     reset_memory: bool = Field(default=False, description="Clear this session's memory before handling the message.")
