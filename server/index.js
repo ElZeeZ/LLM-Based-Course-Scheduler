@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import authRoutes from "./routes/auth.js";
 import coursesRoutes from "./routes/courses.js";
+import schedulesRoutes from "./routes/schedules.js";
 import { initializeDatabase } from "./db.js";
 
 const app = express();
@@ -47,6 +48,7 @@ app.get("/api/health", (_request, response) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/courses", coursesRoutes);
+app.use("/api/schedules", schedulesRoutes);
 
 app.use((_request, response) => {
   response.status(404).json({ success: false, message: "Route not found." });

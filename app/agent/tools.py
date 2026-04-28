@@ -5,7 +5,10 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from app.agent.course_resolver import resolve_requested_courses
 from app.agent.preferences import extract_max_credits
+from app.integrations.node_courses import fetch_exact_schedule_sections
+from app.integrations.postgres_courses import fetch_postgres_schedule_sections
 from app.rag.retriever import retrieve_relevant_courses
 from app.scheduler.constraints import check_schedule_conflicts
 from app.scheduler.optimizer import generate_optimal_schedules
@@ -20,9 +23,24 @@ def course_search_tool(query: str) -> str:
 
 @tool
 def schedule_generator_tool(request: str) -> str:
-    """Generate a deterministic non-conflicting schedule for an academic request."""
-    courses = retrieve_relevant_courses(request, top_k=40, unique_courses=False)
-    schedule = generate_optimal_schedules(courses, max_credits=extract_max_credits(request))
+    """Generate a deterministic non-conflicting schedule for an academic request.
+
+    Resolve requested courses, retrieve exact real sections from PostgreSQL,
+    then optimize without inventing sections.
+    """
+    resolved_courses = resolve_requested_courses(request)
+    try:
+        courses = fetch_postgres_schedule_sections(query=request, selected_courses=resolved_courses)
+    except RuntimeError:
+        try:
+            courses = fetch_exact_schedule_sections(query=request, selected_courses=resolved_courses)
+        except RuntimeError:
+            courses = []
+    schedule = generate_optimal_schedules(
+        courses,
+        max_credits=extract_max_credits(request),
+        enforce_prerequisites=False,
+    )
     return json.dumps(schedule, ensure_ascii=False)
 
 

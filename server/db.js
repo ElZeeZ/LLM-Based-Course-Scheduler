@@ -63,6 +63,33 @@ export async function initializeDatabase() {
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;");
   await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_idx ON users (email);");
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS generated_schedules (
+      generated_schedule_id SERIAL PRIMARY KEY,
+      email TEXT NOT NULL,
+      score NUMERIC,
+      total_credits_of_schedule NUMERIC DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      saved_name TEXT
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS generated_schedule_items (
+      generated_schedule_id INTEGER NOT NULL,
+      crn INTEGER NOT NULL,
+      PRIMARY KEY (generated_schedule_id, crn)
+    );
+  `);
+
+  await pool.query("ALTER TABLE generated_schedules ADD COLUMN IF NOT EXISTS score NUMERIC;");
+  await pool.query("ALTER TABLE generated_schedules ADD COLUMN IF NOT EXISTS total_credits_of_schedule NUMERIC DEFAULT 0;");
+  await pool.query("ALTER TABLE generated_schedules ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;");
+  await pool.query("ALTER TABLE generated_schedules ADD COLUMN IF NOT EXISTS saved_name TEXT;");
+  await pool.query("CREATE INDEX IF NOT EXISTS generated_schedules_email_idx ON generated_schedules (email);");
+  await pool.query("CREATE INDEX IF NOT EXISTS generated_schedule_items_schedule_idx ON generated_schedule_items (generated_schedule_id);");
+  await pool.query("CREATE INDEX IF NOT EXISTS generated_schedule_items_crn_idx ON generated_schedule_items (crn);");
+
   const legacyPasswordColumn = await pool.query(`
     SELECT 1
     FROM information_schema.columns

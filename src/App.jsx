@@ -64,6 +64,7 @@ const COURSE_COLORS = {
 };
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://localhost:5000").replace(/\/$/, "");
+const LLM_API_BASE_URL = (import.meta.env.VITE_LLM_API_URL || "http://localhost:8000").replace(/\/$/, "");
 
 async function getApiData(path, queryParams = {}) {
   const url = new URL(`${API_BASE_URL}${path}`);
@@ -109,6 +110,67 @@ async function postAuthRequest(path, payload) {
       message: "Could not reach the authentication server."
     };
   }
+}
+
+async function postApiData(path, payload) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || data.success === false) {
+    throw new Error(data.message || "Unable to save data.");
+  }
+
+  return data;
+}
+
+async function postLlmRequest(path, payload) {
+  const response = await fetch(`${LLM_API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.detail || data.message || "Unable to reach the AI scheduler.");
+  }
+
+  return data;
+}
+
+function shouldUseScheduleEndpoint(message, planningCourses) {
+  const text = String(message || "").toLowerCase();
+  const hasScheduleIntent = /\b(schedule|timetable|plan|semester|section|sections|crn|conflict|optimi[sz]e)\b/.test(text);
+  const hasScheduleMutation = /\b(remove|drop|delete|take out|exclude|avoid|without|not with|do not want|don't want|dont want)\b/.test(text);
+  const hasDayPreference = /\b(mwf|m\/w\/f|tr|t\/r|tuesday\s+(and\s+)?thursday|monday\s+wednesday\s+friday)\b/.test(text);
+  const hasInstructorPreference = /\b(instructor|professor|prof|dr\.?)\b/.test(text);
+  const hasPlanningContext = planningCourses.length > 0;
+
+  return hasScheduleIntent || hasScheduleMutation || hasDayPreference || hasInstructorPreference || hasPlanningContext;
+}
+
+function shouldUseCourseSearchEndpoint(message, planningCourses) {
+  const text = String(message || "").toLowerCase();
+  const hasDiscoveryIntent = /\b(find|search|show|list|what|which|get|give me|recommend)\b/.test(text);
+  const hasSemanticCue = /\b(relevant|related|similar|description|descriptions|about|involve|involves|based on|topic|topics|courses?)\b/.test(text);
+  const hasScheduleIntent = /\b(schedule|timetable|plan|semester|section|sections|crn|conflict|optimi[sz]e)\b/.test(text);
+  const hasScheduleMutation = /\b(remove|drop|delete|take out|exclude|avoid|without|not with|do not want|don't want|dont want)\b/.test(text);
+  const hasDayPreference = /\b(mwf|m\/w\/f|tr|t\/r|tuesday\s+(and\s+)?thursday|monday\s+wednesday\s+friday)\b/.test(text);
+
+  return (
+    (hasDiscoveryIntent || hasSemanticCue) &&
+    !hasScheduleIntent &&
+    !hasScheduleMutation &&
+    !hasDayPreference
+  );
 }
 
 function parseTimeParts(time) {
@@ -777,35 +839,6 @@ function createAiPlanningSelection(course, campus) {
   };
 }
 
-async function resolveAiPlanningSelectionsToSections(aiPlanningCourses) {
-  const selectedSectionIds = new Set();
-  const resolvedSections = [];
-
-  for (const planningCourse of aiPlanningCourses) {
-    const sections = await getApiData("/api/courses/sections", {
-      search: planningCourse.course_code,
-      campus: planningCourse.campus,
-      limit: 20
-    });
-    const matchingSection = (Array.isArray(sections) ? sections : [])
-      .map(normalizeApiSection)
-      .find((section) => {
-        return (
-          section.course_code === planningCourse.course_code &&
-          section.campus === planningCourse.campus &&
-          !selectedSectionIds.has(section.id)
-        );
-      });
-
-    if (matchingSection) {
-      selectedSectionIds.add(matchingSection.id);
-      resolvedSections.push(matchingSection);
-    }
-  }
-
-  return resolvedSections;
-}
-
 /* =========================
    App
 ========================= */
@@ -833,6 +866,35 @@ export default function App() {
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, [activeView, isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser?.email) {
+      return;
+    }
+
+    let isCurrent = true;
+
+    async function loadSavedSchedule() {
+      try {
+        const data = await getApiData("/api/schedules/me", { email: currentUser.email });
+        const savedItems = Array.isArray(data.schedule?.items)
+          ? data.schedule.items.map(normalizeApiSection)
+          : [];
+
+        if (isCurrent) {
+          setSelectedScheduleCourses(savedItems);
+        }
+      } catch (error) {
+        console.error("Saved schedule load error:", error.message);
+      }
+    }
+
+    loadSavedSchedule();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [isAuthenticated, currentUser?.email]);
 
   async function handleLogin(email, password) {
     const result = await postAuthRequest("/api/auth/login", { email, password });
@@ -905,17 +967,55 @@ export default function App() {
         return currentCourses;
       }
 
-      return [...currentCourses, course];
+      const nextCourses = [...currentCourses, course];
+      saveScheduleCourses(nextCourses, "Current Schedule").catch((error) => {
+        console.error("Saved schedule update error:", error.message);
+      });
+      return nextCourses;
     });
   }
 
   function handleRemoveCourse(courseId) {
-    setSelectedScheduleCourses((currentCourses) => currentCourses.filter((course) => course.id !== courseId));
+    setSelectedScheduleCourses((currentCourses) => {
+      const nextCourses = currentCourses.filter((course) => course.id !== courseId);
+      saveScheduleCourses(nextCourses, "Current Schedule").catch((error) => {
+        console.error("Saved schedule update error:", error.message);
+      });
+      return nextCourses;
+    });
   }
 
-  function handleApplyAiSchedule(courses) {
+  async function saveScheduleCourses(courses, savedName = "AI Balanced Fall Plan") {
+    if (!currentUser?.email) {
+      return;
+    }
+
+    const crns = courses
+      .map((course) => Number(course.crn || course.id))
+      .filter((crn) => Number.isInteger(crn) && crn > 0);
+
+    await postApiData("/api/schedules/me", {
+      email: currentUser.email,
+      saved_name: savedName,
+      crns
+    });
+  }
+
+  async function handleApplyAiSchedule(courses) {
     setSelectedScheduleCourses(courses);
     setActiveView("dashboard");
+    try {
+      await saveScheduleCourses(courses);
+    } catch (error) {
+      console.error("Saved schedule update error:", error.message);
+    }
+  }
+
+  function handleSetAiSuggestedSchedule(courses) {
+    setSelectedScheduleCourses(courses);
+    saveScheduleCourses(courses).catch((error) => {
+      console.error("Saved schedule update error:", error.message);
+    });
   }
 
   if (!isAuthenticated) {
@@ -954,10 +1054,12 @@ export default function App() {
         onAddCourse={handleAddAiPlanningCourse}
         onRemoveAiCourse={handleRemoveAiPlanningCourse}
         onApplySchedule={handleApplyAiSchedule}
+        onSetSuggestedSchedule={handleSetAiSuggestedSchedule}
         aiMessages={aiMessages}
         setAiMessages={setAiMessages}
         aiInputValue={aiInputValue}
         setAiInputValue={setAiInputValue}
+        currentUser={currentUser}
       />
     );
   }
@@ -1966,10 +2068,12 @@ function AIChatPage({
   onAddCourse,
   onRemoveAiCourse,
   onApplySchedule,
+  onSetSuggestedSchedule,
   aiMessages,
   setAiMessages,
   aiInputValue,
-  setAiInputValue
+  setAiInputValue,
+  currentUser
 }) {
   const chatThreadRef = useRef(null);
   const [isAiResponding, setIsAiResponding] = useState(false);
@@ -1993,38 +2097,54 @@ function AIChatPage({
   }, [aiMessages]);
 
   async function buildAssistantResponse(userText) {
-    const normalizedText = userText.toLowerCase();
-    const resolvedAiSections = await resolveAiPlanningSelectionsToSections(aiSelectedCourses);
-    const suggestedCourses = resolvedAiSections.length > 0 ? resolvedAiSections : selectedCourses;
+    const planningCourses = aiSelectedCourses.length > 0 ? aiSelectedCourses : selectedCourses;
+    const sessionId = currentUser?.id ? `user-${currentUser.id}` : "default";
 
-    if (suggestedCourses.length === 0) {
+    if (shouldUseCourseSearchEndpoint(userText, planningCourses)) {
+      const result = await postLlmRequest("/chat", {
+        message: userText,
+        session_id: sessionId
+      });
+
       return {
         id: `assistant-${Date.now()}`,
         role: "assistant",
-        text: "Add courses from the catalog or your manual schedule first, then I can suggest a real section-based plan."
+        text: result.response || "I could not find relevant courses for that request."
       };
     }
 
-    const totalCredits = suggestedCourses.reduce((sum, course) => sum + course.credits, 0);
-    const avoidsEarlyClasses = suggestedCourses.every((course) => timeToMinutes(course.start_time) >= 10 * 60);
-    const avoidsFriday = suggestedCourses.every((course) => !course.days.includes("Friday"));
-    const conflictCount = detectScheduleConflicts(suggestedCourses).pairs.length;
+    if (!shouldUseScheduleEndpoint(userText, planningCourses)) {
+      const result = await postLlmRequest("/chat", {
+        message: userText,
+        session_id: sessionId
+      });
 
-    const requestedCredits = normalizedText.includes("12") ? "12-credit" : "balanced";
-    const compactPhrase = normalizedText.includes("gap") || normalizedText.includes("compact")
-      ? "with shorter gaps between classes"
-      : "with a steady weekly rhythm";
+      return {
+        id: `assistant-${Date.now()}`,
+        role: "assistant",
+        text: result.response || "I could not find relevant courses for that request."
+      };
+    }
+
+    const result = await postLlmRequest("/generate-schedule", {
+      query: userText,
+      selected_courses: planningCourses,
+      session_id: sessionId
+    });
+    const suggestedCourses = (Array.isArray(result.selected_courses) ? result.selected_courses : [])
+      .map(normalizeApiSection);
+    const totalCredits = Number(result.total_credits) || suggestedCourses.reduce((sum, course) => sum + course.credits, 0);
 
     return {
       id: `assistant-${Date.now()}`,
       role: "assistant",
-      text: `I created a ${requestedCredits} schedule ${compactPhrase} using ${aiSelectedCourses.length > 0 ? "your AI planning course list" : "your current selected sections"}: ${suggestedCourses.length} courses, ${totalCredits} credits, ${conflictCount} conflicts, ${avoidsFriday ? "no Friday classes" : "some Friday meetings"}, and ${avoidsEarlyClasses ? "no classes before 10 AM" : "one early class to review"}.`,
+      text: result.explanation || `I created a schedule with ${suggestedCourses.length} courses and ${totalCredits} credits.`,
       suggestedCourses,
       scheduleMeta: {
         saved_name: "AI Balanced Fall Plan",
-        score: 0.94,
+        score: 1,
         total_credits_of_schedule: totalCredits,
-        generated_schedule_id: 9001
+        generated_schedule_id: Date.now()
       }
     };
   }
@@ -2053,6 +2173,9 @@ function AIChatPage({
     }));
 
     setAiMessages((currentMessages) => [...currentMessages, assistantMessage]);
+    if (assistantMessage.suggestedCourses?.length > 0) {
+      onSetSuggestedSchedule(assistantMessage.suggestedCourses);
+    }
     setIsAiResponding(false);
   }
 
@@ -2183,7 +2306,7 @@ function ChatMessage({ message, onApplySchedule }) {
       </div>
       <div className="chat-bubble">
         <p>{message.text}</p>
-        {message.suggestedCourses && (
+        {message.suggestedCourses?.length > 0 && (
           <SuggestedScheduleCard
             courses={message.suggestedCourses}
             scheduleMeta={message.scheduleMeta}
@@ -2216,7 +2339,7 @@ function SuggestedScheduleCard({ courses, scheduleMeta, onApplySchedule }) {
       <div className="suggested-stats">
         <span>{scheduleMeta.total_credits_of_schedule} credits</span>
         <span>{weeklyHours} weekly hours</span>
-        <span>{conflicts} conflicts</span>
+        {conflicts > 0 && <span>{conflicts} conflicts</span>}
       </div>
 
       <div className="suggested-course-list">

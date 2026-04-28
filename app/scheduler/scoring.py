@@ -11,7 +11,11 @@ def score_course(course: dict[str, Any], preferred_days: list[str] | None = None
     days = set(normalize_days(course.get("days")))
     if preferred_days:
         preferred = set(normalize_days(preferred_days))
-        if days & preferred:
+        if days == preferred:
+            score += 0.5
+        elif days and days <= preferred:
+            score += 0.25
+        elif days & preferred:
             score += 0.1
     start = parse_time_value(course.get("start_time"))
     if start and start >= time(8, 0):

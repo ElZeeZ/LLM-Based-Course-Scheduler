@@ -27,6 +27,11 @@ class Settings:
     chroma_host: str
     chroma_collection: str
     local_chroma_path: Path
+    database_url: str | None
+    pgsslmode: str | None
+    node_api_base_url: str
+    node_internal_api_key: str | None
+    client_urls: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -45,6 +50,11 @@ class Settings:
             chroma_host=os.getenv("CHROMA_HOST", "api.trychroma.com"),
             chroma_collection=os.getenv("CHROMA_COLLECTION", "course_embeddings"),
             local_chroma_path=Path(os.getenv("LOCAL_CHROMA_PATH", str(LOCAL_CHROMA_DIR))),
+            database_url=os.getenv("DATABASE_URL"),
+            pgsslmode=os.getenv("PGSSLMODE"),
+            node_api_base_url=os.getenv("NODE_API_BASE_URL", "http://localhost:5000"),
+            node_internal_api_key=os.getenv("NODE_INTERNAL_API_KEY"),
+            client_urls=os.getenv("CLIENT_URL", "http://127.0.0.1:5173,http://localhost:5173"),
         )
 
 

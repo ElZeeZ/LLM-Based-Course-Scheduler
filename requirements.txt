@@ -10,3 +10,4 @@ chromadb
 pydantic
 rapidfuzz
 httpx
+psycopg[binary]

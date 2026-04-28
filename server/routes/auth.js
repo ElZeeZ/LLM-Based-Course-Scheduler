@@ -1,6 +1,7 @@
 import express from "express";
 import bcrypt from "bcryptjs";
 import { pool } from "../db.js";
+import { ensureSavedScheduleForUser } from "../services/scheduleService.js";
 
 const router = express.Router();
 const PASSWORD_SALT_ROUNDS = 12;
@@ -48,6 +49,7 @@ router.post("/register", async (request, response) => {
       `,
       [email, username, passwordHash]
     );
+    await ensureSavedScheduleForUser(createdUser.rows[0].email);
 
     return response.status(201).json({
       success: true,
@@ -103,6 +105,7 @@ router.post("/login", async (request, response) => {
         message: "Email or password is incorrect."
       });
     }
+    await ensureSavedScheduleForUser(user.email);
 
     return response.json({
       success: true,

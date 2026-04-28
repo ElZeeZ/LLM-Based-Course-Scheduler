@@ -18,6 +18,8 @@ class GenerateScheduleRequest(BaseModel):
     max_credits: float = Field(default=DEFAULT_MAX_CREDITS, gt=0, le=24)
     completed_courses: list[str] = Field(default_factory=list)
     preferred_days: list[str] = Field(default_factory=list)
+    selected_courses: list[dict[str, Any]] = Field(default_factory=list)
+    session_id: str = Field(default="default", description="Temporary in-memory chat session identifier.")
     top_k: int = Field(default=40, ge=1, le=150)
 
 

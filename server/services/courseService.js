@@ -34,7 +34,12 @@ export function normalizeCampus(campus) {
     return "Beirut";
   }
 
-  if (normalizedCampus === "2" || normalizedCampus === "jbeil" || normalizedCampus === "byblos") {
+  if (
+    normalizedCampus === "2" ||
+    normalizedCampus === "jbeil" ||
+    normalizedCampus === "jbiel" ||
+    normalizedCampus === "byblos"
+  ) {
     return "Jbeil";
   }
 
@@ -334,6 +339,188 @@ export async function getSections({ search = "", days = [], campus = "", limit =
       );
     })
     .slice(0, resultLimit);
+}
+
+export async function getSectionsForCourses({
+  courses = [],
+  courseCodes = [],
+  searchTerms = [],
+  campus = "",
+  limitPerCourse = 20
+} = {}) {
+  const normalizedSelections = normalizeCourseSelections(courses, courseCodes, searchTerms, campus);
+  const selectedSections = [];
+  const selectedCrns = new Set();
+  const perCourseLimit = Math.min(Math.max(Number(limitPerCourse) || 20, 1), 50);
+
+  for (const selection of normalizedSelections) {
+    const sections = await getSections({
+      search: selection.course_code,
+      campus: selection.campus,
+      limit: perCourseLimit
+    });
+    const requestedCode = compactValue(selection.course_code);
+    const shouldMatchExactCourseCode = /^[a-z]{2,5}\d{3}[a-z]?$/i.test(requestedCode);
+
+    sections
+      .filter((section) => !shouldMatchExactCourseCode || compactValue(section.course_code) === requestedCode)
+      .forEach((section) => {
+        if (!selectedCrns.has(section.crn)) {
+          selectedCrns.add(section.crn);
+          selectedSections.push(section);
+        }
+      });
+  }
+
+  return selectedSections;
+}
+
+export async function getExactSectionsForCourses({
+  courses = [],
+  courseCodes = [],
+  crns = [],
+  campus = "",
+  limitPerCourse = 20
+} = {}) {
+  const exactCourseCodes = normalizeExactCourseCodes(courses, courseCodes);
+  const exactCrns = normalizeCrns(crns);
+  const databaseCampus = campusToDatabaseValue(campus);
+  const perCourseLimit = Math.min(Math.max(Number(limitPerCourse) || 20, 1), 50);
+  const resultLimit = Math.min(Math.max((exactCourseCodes.length + exactCrns.length || 1) * perCourseLimit, 1), 500);
+
+  if (exactCourseCodes.length === 0 && exactCrns.length === 0) {
+    return [];
+  }
+
+  const filters = [];
+  const values = [];
+
+  if (exactCourseCodes.length > 0) {
+    values.push(exactCourseCodes);
+    filters.push("REPLACE(LOWER(cs.course_code), ' ', '') = ANY($" + values.length + "::text[])");
+  }
+
+  if (exactCrns.length > 0) {
+    values.push(exactCrns);
+    filters.push("CAST(cs.crn AS TEXT) = ANY($" + values.length + "::text[])");
+  }
+
+  const whereParts = [`(${filters.join(" OR ")})`];
+  if (databaseCampus) {
+    values.push(databaseCampus);
+    whereParts.push(`cs.campus = $${values.length}`);
+  }
+
+  values.push(resultLimit);
+  const limitParam = `$${values.length}`;
+
+  const result = await pool.query(
+    `
+      SELECT
+        cs.crn,
+        cs.course_code,
+        cs.semester,
+        cs.section_number,
+        cs.instructor_name,
+        cs.days,
+        cs.room,
+        cs.start_time,
+        cs.end_time,
+        cs.building,
+        cs.campus,
+        c.title,
+        c.credits,
+        c.prerequisite,
+        c.description
+      FROM course_sections cs
+      LEFT JOIN courses c ON c.course_code = cs.course_code
+      WHERE ${whereParts.join(" AND ")}
+      ORDER BY cs.course_code ASC, cs.section_number ASC, cs.crn ASC
+      LIMIT ${limitParam};
+    `,
+    values
+  );
+
+  return result.rows.map(normalizeSection);
+}
+
+function normalizeCourseSelections(courses, courseCodes, searchTerms, campus) {
+  const selections = [];
+  const seen = new Set();
+  const globalCampus = normalizeCampus(campus);
+
+  function addSelection(courseCode, preferredCampus = "") {
+    const code = valueOrNA(courseCode);
+    if (code === "N/A") {
+      return;
+    }
+
+    const selectedCampus = normalizeCampus(preferredCampus || globalCampus);
+    const campusValue = selectedCampus === "N/A" ? "" : selectedCampus;
+    const key = `${compactValue(code)}:${compactValue(campusValue)}`;
+
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    selections.push({
+      course_code: code,
+      campus: campusValue
+    });
+  }
+
+  (Array.isArray(courses) ? courses : []).forEach((course) => {
+    addSelection(course.course_code || course.code, course.campus);
+  });
+
+  (Array.isArray(courseCodes) ? courseCodes : []).forEach((courseCode) => {
+    addSelection(courseCode, globalCampus);
+  });
+
+  (Array.isArray(searchTerms) ? searchTerms : []).forEach((searchTerm) => {
+    addSelection(searchTerm, globalCampus);
+  });
+
+  return selections;
+}
+
+function normalizeExactCourseCodes(courses, courseCodes) {
+  const codes = [];
+  const seen = new Set();
+
+  function addCode(value) {
+    const compactCode = compactValue(value);
+    if (!/^[a-z]{2,5}\d{3}[a-z]?$/.test(compactCode) || seen.has(compactCode)) {
+      return;
+    }
+    seen.add(compactCode);
+    codes.push(compactCode);
+  }
+
+  (Array.isArray(courses) ? courses : []).forEach((course) => {
+    addCode(course.course_code || course.code || course.course_id);
+  });
+
+  (Array.isArray(courseCodes) ? courseCodes : []).forEach(addCode);
+
+  return codes;
+}
+
+function normalizeCrns(crns) {
+  const normalizedCrns = [];
+  const seen = new Set();
+
+  (Array.isArray(crns) ? crns : []).forEach((crn) => {
+    const value = String(crn || "").trim();
+    if (!/^\d{4,6}$/.test(value) || seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+    normalizedCrns.push(value);
+  });
+
+  return normalizedCrns;
 }
 
 export async function getCourseCatalog({ search = "", campus = "", limit = 100 } = {}) {
