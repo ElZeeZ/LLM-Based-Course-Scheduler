@@ -57,6 +57,8 @@ def generate_grounded_response(
             "For schedule answers, mention the applied constraints and give a concise schedule list. "
             "Only mention a conflict if the grounded schedule conflicts list is non-empty. "
             "For course discovery answers, list the relevant courses in ranked order without scores. "
+            "Put each course on its own line using this exact shape: "
+            "1. CODE - COURSE NAME | Department\n   One concise description sentence. "
             "For normal conversation, answer naturally but stay within the project context.\n\n"
             f"Task: {task}\n"
             f"User request: {user_request}\n"

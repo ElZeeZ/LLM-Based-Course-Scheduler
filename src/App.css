@@ -1511,6 +1511,7 @@ button {
 .chat-bubble p {
   margin: 0;
   line-height: 1.55;
+  white-space: pre-line;
 }
 
 .chat-input-row {
