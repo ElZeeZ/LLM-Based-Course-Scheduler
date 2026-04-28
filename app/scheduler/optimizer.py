@@ -268,7 +268,7 @@ def _section_matches_identifier(course: dict[str, Any], identifiers: list[str]) 
     ]
     normalized_values = [_normalize_identifier(value) for value in values if value not in (None, "")]
     return any(
-        _identifier_matches(identifier, value)
+        identifier == value
         for identifier in identifiers
         for value in normalized_values
     )

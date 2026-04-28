@@ -10,6 +10,7 @@ import {
   Check,
   CheckCircle2,
   Clock3,
+  FileText,
   GraduationCap,
   KeyRound,
   LogOut,
@@ -19,6 +20,7 @@ import {
   Plus,
   Search,
   Send,
+  Save,
   Sparkles,
   Trash2,
   User,
@@ -47,7 +49,7 @@ const DAY_FILTERS = [
 ];
 
 const SCHEDULE_START_HOUR = 8;
-const SCHEDULE_END_HOUR = 18;
+const SCHEDULE_END_HOUR = 21;
 const SCHEDULE_START_MINUTES = SCHEDULE_START_HOUR * 60;
 const SCHEDULE_END_MINUTES = SCHEDULE_END_HOUR * 60;
 const SCHEDULE_TOTAL_MINUTES = SCHEDULE_END_MINUTES - SCHEDULE_START_MINUTES;
@@ -85,6 +87,23 @@ async function getApiData(path, queryParams = {}) {
   return data;
 }
 
+async function postApiData(path, payload) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || data.success === false) {
+    throw new Error(data.message || "Unable to save data.");
+  }
+
+  return data;
+}
+
 async function postAuthRequest(path, payload) {
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -112,23 +131,6 @@ async function postAuthRequest(path, payload) {
   }
 }
 
-async function postApiData(path, payload) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok || data.success === false) {
-    throw new Error(data.message || "Unable to save data.");
-  }
-
-  return data;
-}
-
 async function postLlmRequest(path, payload) {
   const response = await fetch(`${LLM_API_BASE_URL}${path}`, {
     method: "POST",
@@ -144,33 +146,6 @@ async function postLlmRequest(path, payload) {
   }
 
   return data;
-}
-
-function shouldUseScheduleEndpoint(message, planningCourses) {
-  const text = String(message || "").toLowerCase();
-  const hasScheduleIntent = /\b(schedule|timetable|plan|semester|section|sections|crn|conflict|optimi[sz]e)\b/.test(text);
-  const hasScheduleMutation = /\b(remove|drop|delete|take out|exclude|avoid|without|not with|do not want|don't want|dont want)\b/.test(text);
-  const hasDayPreference = /\b(mwf|m\/w\/f|tr|t\/r|tuesday\s+(and\s+)?thursday|monday\s+wednesday\s+friday)\b/.test(text);
-  const hasInstructorPreference = /\b(instructor|professor|prof|dr\.?)\b/.test(text);
-  const hasPlanningContext = planningCourses.length > 0;
-
-  return hasScheduleIntent || hasScheduleMutation || hasDayPreference || hasInstructorPreference || hasPlanningContext;
-}
-
-function shouldUseCourseSearchEndpoint(message, planningCourses) {
-  const text = String(message || "").toLowerCase();
-  const hasDiscoveryIntent = /\b(find|search|show|list|what|which|get|give me|recommend)\b/.test(text);
-  const hasSemanticCue = /\b(relevant|related|similar|description|descriptions|about|involve|involves|based on|topic|topics|courses?)\b/.test(text);
-  const hasScheduleIntent = /\b(schedule|timetable|plan|semester|section|sections|crn|conflict|optimi[sz]e)\b/.test(text);
-  const hasScheduleMutation = /\b(remove|drop|delete|take out|exclude|avoid|without|not with|do not want|don't want|dont want)\b/.test(text);
-  const hasDayPreference = /\b(mwf|m\/w\/f|tr|t\/r|tuesday\s+(and\s+)?thursday|monday\s+wednesday\s+friday)\b/.test(text);
-
-  return (
-    (hasDiscoveryIntent || hasSemanticCue) &&
-    !hasScheduleIntent &&
-    !hasScheduleMutation &&
-    !hasDayPreference
-  );
 }
 
 function parseTimeParts(time) {
@@ -420,6 +395,58 @@ function getWeeklyHours(courses) {
   return (totalMinutes / 60).toFixed(1);
 }
 
+function formatMinutesAsTime(totalMinutes) {
+  if (!Number.isFinite(totalMinutes)) {
+    return "N/A";
+  }
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const suffix = hours >= 12 ? "PM" : "AM";
+  const displayHours = hours % 12 || 12;
+  return `${displayHours}:${String(minutes).padStart(2, "0")} ${suffix}`;
+}
+
+function getSelectedScheduleTimeRange(courses) {
+  const startTimes = [];
+  const endTimes = [];
+
+  courses.forEach((course) => {
+    const startTime = timeToMinutes(course.start_time);
+    const endTime = timeToMinutes(course.end_time);
+
+    if (Number.isFinite(startTime)) {
+      startTimes.push(startTime);
+    }
+
+    if (Number.isFinite(endTime)) {
+      endTimes.push(endTime);
+    }
+  });
+
+  if (startTimes.length === 0 || endTimes.length === 0) {
+    return `${formatTime("08:00")} - ${formatTime("21:00")}`;
+  }
+
+  return `${formatMinutesAsTime(Math.min(...startTimes))} - ${formatMinutesAsTime(Math.max(...endTimes))}`;
+}
+
+function getSelectedScheduleDaySummary(courses) {
+  const selectedDays = Array.from(
+    new Set(courses.flatMap((course) => course.days || []))
+  ).sort((firstDay, secondDay) => WEEK_DAYS.indexOf(firstDay) - WEEK_DAYS.indexOf(secondDay));
+
+  if (selectedDays.length === 0) {
+    return "No scheduled days";
+  }
+
+  if (selectedDays.length === WEEK_DAYS.length) {
+    return "Monday - Friday";
+  }
+
+  return selectedDays.map((day) => DAY_SHORT_LABELS[day] || day).join(" / ");
+}
+
 function getTimetableInstances(courses, conflictCourseIds) {
   const instancesByDay = WEEK_DAYS.reduce((accumulator, day) => {
     accumulator[day] = [];
@@ -500,6 +527,200 @@ function getTimetableInstances(courses, conflictCourseIds) {
       }));
     });
   });
+}
+
+function escapePdfText(value) {
+  return String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/[^\x20-\x7E]/g, " ");
+}
+
+function hexToPdfRgb(hexColor) {
+  const normalizedHex = String(hexColor || "#000000").replace("#", "");
+  const value = normalizedHex.length === 3
+    ? normalizedHex.split("").map((character) => `${character}${character}`).join("")
+    : normalizedHex.padEnd(6, "0").slice(0, 6);
+  const red = parseInt(value.slice(0, 2), 16) / 255;
+  const green = parseInt(value.slice(2, 4), 16) / 255;
+  const blue = parseInt(value.slice(4, 6), 16) / 255;
+
+  return [red, green, blue].map((channel) => Number.isFinite(channel) ? channel.toFixed(3) : "0");
+}
+
+function pdfLine(x1, y1, x2, y2, color = "#cbd5e1", width = 1) {
+  const [red, green, blue] = hexToPdfRgb(color);
+  return `${red} ${green} ${blue} RG ${width} w ${x1} ${y1} m ${x2} ${y2} l S`;
+}
+
+function pdfRect(x, y, width, height, fill = "#ffffff", stroke = "#cbd5e1", strokeWidth = 1) {
+  const [fillRed, fillGreen, fillBlue] = hexToPdfRgb(fill);
+  const [strokeRed, strokeGreen, strokeBlue] = hexToPdfRgb(stroke);
+  return `${fillRed} ${fillGreen} ${fillBlue} rg ${strokeRed} ${strokeGreen} ${strokeBlue} RG ${strokeWidth} w ${x} ${y} ${width} ${height} re B`;
+}
+
+function pdfText(text, x, y, size = 10, color = "#0f172a", font = "F1") {
+  const [red, green, blue] = hexToPdfRgb(color);
+  return `BT /${font} ${size} Tf ${red} ${green} ${blue} rg ${x} ${y} Td (${escapePdfText(text)}) Tj ET`;
+}
+
+function truncateText(value, maxLength) {
+  const text = String(value || "");
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return `${text.slice(0, Math.max(maxLength - 3, 1))}...`;
+}
+
+function buildSchedulePdfDocument({
+  selectedCourses,
+  currentUser,
+  totalCredits,
+  totalWeeklyHours,
+  conflictReport
+}) {
+  const pageWidth = 792;
+  const pageHeight = 612;
+  const margin = 36;
+  const tableX = margin;
+  const tableTop = 490;
+  const timeColumnWidth = 56;
+  const headerHeight = 38;
+  const bodyHeight = 390;
+  const tableWidth = pageWidth - margin * 2;
+  const dayColumnWidth = (tableWidth - timeColumnWidth) / WEEK_DAYS.length;
+  const tableBottom = tableTop - headerHeight - bodyHeight;
+  const bodyTop = tableTop - headerHeight;
+  const scheduleRange = getSelectedScheduleTimeRange(selectedCourses);
+  const daySummary = getSelectedScheduleDaySummary(selectedCourses);
+  const conflictCount = conflictReport.pairs.length;
+  const timetableInstances = getTimetableInstances(selectedCourses, conflictReport.conflictCourseIds);
+  const hourMarkers = Array.from(
+    { length: SCHEDULE_END_HOUR - SCHEDULE_START_HOUR + 1 },
+    (_, index) => SCHEDULE_START_HOUR + index
+  );
+  const operations = [];
+
+  operations.push(pdfRect(0, 0, pageWidth, pageHeight, "#ffffff", "#ffffff", 0));
+  operations.push(pdfText("University Scheduler", margin, 562, 22, "#111827", "F2"));
+  operations.push(pdfText(currentUser?.username ? `Schedule for ${currentUser.username}` : "Finalized Schedule", margin, 540, 12, "#334155", "F2"));
+  operations.push(pdfText("Fall 2026", margin, 522, 10, "#64748b", "F1"));
+
+  const summaryItems = [
+    `${totalCredits} credits`,
+    `${totalWeeklyHours} weekly hours`,
+    daySummary,
+    scheduleRange,
+    `${conflictCount} conflicts`
+  ];
+  let summaryX = pageWidth - margin;
+  summaryItems.slice().reverse().forEach((item) => {
+    const width = Math.max(70, Math.min(142, item.length * 5.8 + 18));
+    summaryX -= width;
+    operations.push(pdfRect(summaryX, 538, width - 8, 24, conflictCount > 0 && item.includes("conflicts") ? "#fff7ed" : "#f8fafc", conflictCount > 0 && item.includes("conflicts") ? "#fed7aa" : "#dbe3ef", 0.7));
+    operations.push(pdfText(item, summaryX + 8, 546, 8.5, conflictCount > 0 && item.includes("conflicts") ? "#9a3412" : "#334155", "F2"));
+  });
+
+  operations.push(pdfRect(tableX, tableBottom, tableWidth, headerHeight + bodyHeight, "#ffffff", "#cbd5e1", 1));
+  operations.push(pdfRect(tableX, bodyTop, tableWidth, headerHeight, "#f8fafc", "#cbd5e1", 1));
+  operations.push(pdfText("TIME", tableX + 16, bodyTop + 15, 8, "#64748b", "F2"));
+
+  WEEK_DAYS.forEach((day, index) => {
+    const x = tableX + timeColumnWidth + index * dayColumnWidth;
+    operations.push(pdfLine(x, tableBottom, x, tableTop, "#dbe3ef", 0.7));
+    operations.push(pdfText(DAY_SHORT_LABELS[day], x + dayColumnWidth / 2 - 10, bodyTop + 22, 7, "#4f46e5", "F2"));
+    operations.push(pdfText(day, x + dayColumnWidth / 2 - 24, bodyTop + 9, 8.5, "#0f172a", "F2"));
+  });
+
+  operations.push(pdfLine(tableX + timeColumnWidth, tableBottom, tableX + timeColumnWidth, tableTop, "#dbe3ef", 0.7));
+
+  hourMarkers.forEach((hour, index) => {
+    const y = bodyTop - (index / (hourMarkers.length - 1)) * bodyHeight;
+    const labelY = index === 0 ? y - 9 : index === hourMarkers.length - 1 ? y + 3 : y - 3;
+    operations.push(pdfLine(tableX, y, tableX + tableWidth, y, "#e5e7eb", 0.5));
+    operations.push(pdfText(formatTime(`${String(hour).padStart(2, "0")}:00`), tableX + 8, labelY, 7.5, "#64748b", "F2"));
+  });
+
+  timetableInstances.forEach((course) => {
+    const palette = getCoursePalette(course.color);
+    const startOffset = (course.startMinutes - SCHEDULE_START_MINUTES) / SCHEDULE_TOTAL_MINUTES;
+    const duration = (course.endMinutes - course.startMinutes) / SCHEDULE_TOTAL_MINUTES;
+    const laneWidth = dayColumnWidth / course.laneCount;
+    const x = tableX + timeColumnWidth + course.dayIndex * dayColumnWidth + course.laneIndex * laneWidth + 5;
+    const width = laneWidth - 10;
+    const height = Math.max(duration * bodyHeight - 5, 24);
+    const y = bodyTop - startOffset * bodyHeight - height;
+    const safeY = Math.max(tableBottom + 4, Math.min(y, bodyTop - height - 4));
+
+    operations.push(pdfRect(x, safeY, width, height, palette.soft, course.isConflict ? "#fb923c" : palette.border, 1));
+    operations.push(pdfRect(x, safeY, 4, height, palette.accent, palette.accent, 0));
+    operations.push(pdfText(truncateText(course.course_code, 15), x + 9, safeY + height - 13, 7.5, palette.text, "F2"));
+    operations.push(pdfText(truncateText(course.course_name, Math.max(14, Math.floor(width / 5.5))), x + 9, safeY + height - 25, 8, palette.text, "F2"));
+  });
+
+  if (selectedCourses.length === 0) {
+    operations.push(pdfText("No courses selected yet.", tableX + tableWidth / 2 - 56, tableBottom + bodyHeight / 2, 12, "#64748b", "F2"));
+  }
+
+  const content = operations.join("\n");
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`
+  ];
+  const chunks = ["%PDF-1.4\n"];
+  const offsets = [0];
+
+  objects.forEach((object, index) => {
+    offsets.push(chunks.join("").length);
+    chunks.push(`${index + 1} 0 obj\n${object}\nendobj\n`);
+  });
+
+  const xrefOffset = chunks.join("").length;
+  chunks.push(`xref\n0 ${objects.length + 1}\n`);
+  chunks.push("0000000000 65535 f \n");
+  offsets.slice(1).forEach((offset) => {
+    chunks.push(`${String(offset).padStart(10, "0")} 00000 n \n`);
+  });
+  chunks.push(`trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+
+  return chunks.join("");
+}
+
+function openSchedulePdfView({
+  selectedCourses,
+  currentUser,
+  totalCredits,
+  totalWeeklyHours,
+  conflictReport
+}) {
+  const pdfDocument = buildSchedulePdfDocument({
+    selectedCourses,
+    currentUser,
+    totalCredits,
+    totalWeeklyHours,
+    conflictReport
+  });
+  const pdfBlob = new Blob([pdfDocument], { type: "application/pdf" });
+  const pdfUrl = URL.createObjectURL(pdfBlob);
+  const pdfWindow = window.open(pdfUrl, "_blank");
+
+  if (!pdfWindow) {
+    const link = document.createElement("a");
+    link.href = pdfUrl;
+    link.download = "fall-2026-schedule.pdf";
+    link.click();
+  } else {
+    pdfWindow.opener = null;
+  }
+
+  window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 60000);
 }
 
 /* =========================
@@ -854,6 +1075,12 @@ export default function App() {
   const [aiSelectedCourses, setAiSelectedCourses] = useState([]);
   const [aiMessages, setAiMessages] = useState(initialAiMessages);
   const [aiInputValue, setAiInputValue] = useState("");
+  const [schedulePersistenceState, setSchedulePersistenceState] = useState({
+    isLoading: false,
+    isSaving: false,
+    message: "",
+    error: ""
+  });
 
   const selectedScheduleCourseIdSet = useMemo(() => {
     return new Set(selectedScheduleCourses.map((course) => course.id));
@@ -869,32 +1096,63 @@ export default function App() {
 
   useEffect(() => {
     if (!isAuthenticated || !currentUser?.email) {
-      return;
+      return undefined;
     }
 
-    let isCurrent = true;
+    let didCancel = false;
 
     async function loadSavedSchedule() {
+      setSchedulePersistenceState((currentState) => ({
+        ...currentState,
+        isLoading: true,
+        message: "",
+        error: ""
+      }));
+
       try {
         const data = await getApiData("/api/schedules/me", { email: currentUser.email });
-        const savedItems = Array.isArray(data.schedule?.items)
-          ? data.schedule.items.map(normalizeApiSection)
-          : [];
 
-        if (isCurrent) {
-          setSelectedScheduleCourses(savedItems);
+        if (didCancel) {
+          return;
         }
+
+        const savedCourses = (data.schedule?.items || []).map(normalizeApiSection);
+        setSelectedScheduleCourses(savedCourses);
+        setSchedulePersistenceState((currentState) => ({
+          ...currentState,
+          isLoading: false,
+          message: savedCourses.length > 0 ? "Saved schedule loaded." : "",
+          error: ""
+        }));
       } catch (error) {
-        console.error("Saved schedule load error:", error.message);
+        if (didCancel) {
+          return;
+        }
+
+        setSelectedScheduleCourses([]);
+        setSchedulePersistenceState((currentState) => ({
+          ...currentState,
+          isLoading: false,
+          message: "",
+          error: error.message || "Unable to load saved schedule."
+        }));
       }
     }
 
     loadSavedSchedule();
 
     return () => {
-      isCurrent = false;
+      didCancel = true;
     };
-  }, [isAuthenticated, currentUser?.email]);
+  }, [currentUser?.email, isAuthenticated]);
+
+  function clearSchedulePersistenceMessage() {
+    setSchedulePersistenceState((currentState) => ({
+      ...currentState,
+      message: "",
+      error: ""
+    }));
+  }
 
   async function handleLogin(email, password) {
     const result = await postAuthRequest("/api/auth/login", { email, password });
@@ -934,9 +1192,16 @@ export default function App() {
     setCurrentUser(null);
     setActiveView("dashboard");
     setAuthView("login");
+    setSelectedScheduleCourses([]);
     setAiSelectedCourses([]);
     setAiMessages(initialAiMessages);
     setAiInputValue("");
+    setSchedulePersistenceState({
+      isLoading: false,
+      isSaving: false,
+      message: "",
+      error: ""
+    });
   }
 
   function handleAddAiPlanningCourse(course, campus) {
@@ -962,60 +1227,73 @@ export default function App() {
   }
 
   function handleAddScheduleCourse(course) {
+    clearSchedulePersistenceMessage();
     setSelectedScheduleCourses((currentCourses) => {
       if (currentCourses.some((selectedCourse) => selectedCourse.id === course.id)) {
         return currentCourses;
       }
 
-      const nextCourses = [...currentCourses, course];
-      saveScheduleCourses(nextCourses, "Current Schedule").catch((error) => {
-        console.error("Saved schedule update error:", error.message);
-      });
-      return nextCourses;
+      return [...currentCourses, course];
     });
   }
 
   function handleRemoveCourse(courseId) {
-    setSelectedScheduleCourses((currentCourses) => {
-      const nextCourses = currentCourses.filter((course) => course.id !== courseId);
-      saveScheduleCourses(nextCourses, "Current Schedule").catch((error) => {
-        console.error("Saved schedule update error:", error.message);
-      });
-      return nextCourses;
-    });
+    clearSchedulePersistenceMessage();
+    setSelectedScheduleCourses((currentCourses) => currentCourses.filter((course) => course.id !== courseId));
   }
 
-  async function saveScheduleCourses(courses, savedName = "AI Balanced Fall Plan") {
-    if (!currentUser?.email) {
-      return;
-    }
-
-    const crns = courses
-      .map((course) => Number(course.crn || course.id))
-      .filter((crn) => Number.isInteger(crn) && crn > 0);
-
-    await postApiData("/api/schedules/me", {
-      email: currentUser.email,
-      saved_name: savedName,
-      crns
-    });
-  }
-
-  async function handleApplyAiSchedule(courses) {
+  function handleApplyAiSchedule(courses) {
+    clearSchedulePersistenceMessage();
     setSelectedScheduleCourses(courses);
     setActiveView("dashboard");
-    try {
-      await saveScheduleCourses(courses);
-    } catch (error) {
-      console.error("Saved schedule update error:", error.message);
-    }
   }
 
   function handleSetAiSuggestedSchedule(courses) {
+    clearSchedulePersistenceMessage();
     setSelectedScheduleCourses(courses);
-    saveScheduleCourses(courses).catch((error) => {
-      console.error("Saved schedule update error:", error.message);
-    });
+  }
+
+  async function handleSaveSchedule() {
+    if (!currentUser?.email) {
+      setSchedulePersistenceState((currentState) => ({
+        ...currentState,
+        message: "",
+        error: "Please log in again before saving your schedule."
+      }));
+      return;
+    }
+
+    setSchedulePersistenceState((currentState) => ({
+      ...currentState,
+      isSaving: true,
+      message: "",
+      error: ""
+    }));
+
+    try {
+      const crns = selectedScheduleCourses.map((course) => Number(course.crn));
+      const data = await postApiData("/api/schedules/me", {
+        email: currentUser.email,
+        saved_name: "Fall 2026 Plan",
+        crns
+      });
+      const savedCourses = (data.schedule?.items || []).map(normalizeApiSection);
+
+      setSelectedScheduleCourses(savedCourses);
+      setSchedulePersistenceState((currentState) => ({
+        ...currentState,
+        isSaving: false,
+        message: data.message || "Schedule saved successfully.",
+        error: ""
+      }));
+    } catch (error) {
+      setSchedulePersistenceState((currentState) => ({
+        ...currentState,
+        isSaving: false,
+        message: "",
+        error: error.message || "Unable to save schedule."
+      }));
+    }
   }
 
   if (!isAuthenticated) {
@@ -1073,6 +1351,8 @@ export default function App() {
       onOpenAi={() => setActiveView("ai")}
       onLogout={handleLogout}
       currentUser={currentUser}
+      schedulePersistenceState={schedulePersistenceState}
+      onSaveSchedule={handleSaveSchedule}
     />
   );
 }
@@ -1178,7 +1458,7 @@ function LoginPage({ initialEmail, successMessage, onLogin, onOpenRegister }) {
             </button>
           </div>
 
-          <p className="login-footnote">Authentication uses PostgreSQL; scheduler course data remains demo for now.</p>
+          <p className="login-footnote">Authentication uses PostgreSQL; contains courses for Fall 2026 for now.</p>
         </form>
       </section>
     </main>
@@ -1239,7 +1519,7 @@ function RegisterPage({ onRegister, onBackToLogin }) {
           </div>
           <p className="eyebrow">Student registration</p>
           <h1>University Scheduler</h1>
-          <p className="login-subtitle">Create a demo account for AI-powered course planning</p>
+          <p className="login-subtitle">Create a student account for AI-powered course planning</p>
           <div className="mini-schedule-preview" aria-hidden="true">
             <div className="mini-header">
               <span>Mon</span>
@@ -1351,13 +1631,25 @@ function Dashboard({
   onRemoveCourse,
   onOpenAi,
   onLogout,
-  currentUser
+  currentUser,
+  schedulePersistenceState,
+  onSaveSchedule
 }) {
   const conflictReport = useMemo(() => detectScheduleConflicts(selectedCourses), [selectedCourses]);
   const totalCredits = useMemo(() => {
     return selectedCourses.reduce((sum, course) => sum + course.credits, 0);
   }, [selectedCourses]);
   const totalWeeklyHours = useMemo(() => getWeeklyHours(selectedCourses), [selectedCourses]);
+
+  function handleOpenPdfView() {
+    openSchedulePdfView({
+      selectedCourses,
+      currentUser,
+      totalCredits,
+      totalWeeklyHours,
+      conflictReport
+    });
+  }
 
   return (
     <main className="app-shell">
@@ -1369,6 +1661,9 @@ function Dashboard({
             conflictReport={conflictReport}
             totalCredits={totalCredits}
             totalWeeklyHours={totalWeeklyHours}
+            schedulePersistenceState={schedulePersistenceState}
+            onSaveSchedule={onSaveSchedule}
+            onOpenPdfView={handleOpenPdfView}
           />
           <SelectedCoursesPanel selectedCourses={selectedCourses} onRemoveCourse={onRemoveCourse} />
         </aside>
@@ -1398,6 +1693,8 @@ function Dashboard({
 ========================= */
 
 function Navbar({ currentUser, onLogout }) {
+  const greeting = currentUser?.username ? `Hello, ${currentUser.username}!` : "Hello!";
+
   return (
     <header className="top-navbar">
       <div className="navbar-title">
@@ -1408,6 +1705,10 @@ function Navbar({ currentUser, onLogout }) {
           <h1>University Scheduler</h1>
           <p>Interactive AI-powered timetable planner</p>
         </div>
+      </div>
+
+      <div className="navbar-greeting" aria-label="User greeting">
+        {greeting}
       </div>
 
       <div className="navbar-actions">
@@ -1432,9 +1733,13 @@ function ScheduleStatusPanel({
   selectedCourses,
   conflictReport,
   totalCredits,
-  totalWeeklyHours
+  totalWeeklyHours,
+  schedulePersistenceState,
+  onSaveSchedule,
+  onOpenPdfView
 }) {
   const conflictCount = conflictReport.pairs.length;
+  const { isLoading, isSaving, message, error } = schedulePersistenceState || {};
 
   return (
     <div className="sidebar-stack">
@@ -1456,6 +1761,30 @@ function ScheduleStatusPanel({
           <StatusMetric label="Conflicts" value={conflictCount} danger={conflictCount > 0} />
           <StatusMetric label="Total credits" value={totalCredits} />
           <StatusMetric label="Weekly hours" value={totalWeeklyHours} />
+        </div>
+
+        <div className="schedule-save-area">
+          <button
+            className="save-schedule-button"
+            type="button"
+            onClick={onSaveSchedule}
+            disabled={isLoading || isSaving}
+          >
+            <Save size={15} />
+            {isSaving ? "Saving..." : "Save Schedule"}
+          </button>
+          <button
+            className="pdf-view-button"
+            type="button"
+            onClick={onOpenPdfView}
+          >
+            <FileText size={15} />
+            PDF View
+          </button>
+
+          {isLoading && <p className="schedule-save-message muted">Loading saved schedule...</p>}
+          {message && <p className="schedule-save-message success">{message}</p>}
+          {error && <p className="schedule-save-message error">{error}</p>}
         </div>
 
         {conflictCount > 0 && (
@@ -1491,6 +1820,12 @@ function Timetable({ selectedCourses, conflictReport, onRemoveCourse }) {
   const timetableInstances = useMemo(() => {
     return getTimetableInstances(selectedCourses, conflictReport.conflictCourseIds);
   }, [selectedCourses, conflictReport.conflictCourseIds]);
+  const selectedScheduleRange = useMemo(() => {
+    return getSelectedScheduleTimeRange(selectedCourses);
+  }, [selectedCourses]);
+  const selectedScheduleDays = useMemo(() => {
+    return getSelectedScheduleDaySummary(selectedCourses);
+  }, [selectedCourses]);
 
   const hourMarkers = Array.from(
     { length: SCHEDULE_END_HOUR - SCHEDULE_START_HOUR + 1 },
@@ -1505,8 +1840,8 @@ function Timetable({ selectedCourses, conflictReport, onRemoveCourse }) {
           <h2>Fall 2026 Weekly Timetable</h2>
         </div>
         <div className="timetable-badges">
-          <span><CalendarDays size={15} /> Monday - Friday</span>
-          <span><Clock3 size={15} /> 8:00 AM - 6:00 PM</span>
+          <span><CalendarDays size={15} /> {selectedScheduleDays}</span>
+          <span><Clock3 size={15} /> {selectedScheduleRange}</span>
         </div>
       </div>
 
@@ -1611,9 +1946,6 @@ function CourseBlock({ course, onRemoveCourse }) {
         {course.isConflict && <AlertTriangle size={14} />}
       </div>
       <h3>{course.course_name}</h3>
-      <p>CRN {course.crn} · {course.instructor}</p>
-      <span>{formatTimeRange(course)}</span>
-      <span>{course.room}</span>
     </article>
   );
 }
@@ -2098,38 +2430,10 @@ function AIChatPage({
 
   async function buildAssistantResponse(userText) {
     const planningCourses = aiSelectedCourses.length > 0 ? aiSelectedCourses : selectedCourses;
-    const sessionId = currentUser?.id ? `user-${currentUser.id}` : "default";
-
-    if (shouldUseCourseSearchEndpoint(userText, planningCourses)) {
-      const result = await postLlmRequest("/chat", {
-        message: userText,
-        session_id: sessionId
-      });
-
-      return {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        text: result.response || "I could not find relevant courses for that request."
-      };
-    }
-
-    if (!shouldUseScheduleEndpoint(userText, planningCourses)) {
-      const result = await postLlmRequest("/chat", {
-        message: userText,
-        session_id: sessionId
-      });
-
-      return {
-        id: `assistant-${Date.now()}`,
-        role: "assistant",
-        text: result.response || "I could not find relevant courses for that request."
-      };
-    }
-
     const result = await postLlmRequest("/generate-schedule", {
       query: userText,
       selected_courses: planningCourses,
-      session_id: sessionId
+      session_id: currentUser?.id ? `user-${currentUser.id}` : "default"
     });
     const suggestedCourses = (Array.isArray(result.selected_courses) ? result.selected_courses : [])
       .map(normalizeApiSection);

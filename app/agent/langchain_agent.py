@@ -31,6 +31,14 @@ SCHEDULE_CONSTRAINT_RE = re.compile(
     r"\b(mwf|m/w/f|tr|t/r|tuesday|thursday|monday|wednesday|friday|avoid|without|not with|do not want|don't want|dont want|remove|drop|delete|take out|exclude|different|another|other|change|switch|section|instructor|professor|prof|dr\.?)\b",
     re.IGNORECASE,
 )
+COURSE_TAKING_RE = re.compile(
+    r"\b(take|taking|enroll|register|add|include|put|build|make|create|give me)\b",
+    re.IGNORECASE,
+)
+COURSE_DESCRIPTION_RE = re.compile(
+    r"\b(description|describe|details?|what\s+is|tell\s+me\s+about|explain)\b",
+    re.IGNORECASE,
+)
 MAX_MEMORY_MESSAGES = 20
 MAX_CONTEXT_USER_MESSAGES = 4
 
@@ -41,6 +49,7 @@ class AcademicAgent:
         self._messages: list[dict[str, str]] = []
         self._last_schedule_courses: list[dict[str, Any]] = []
         self._last_schedule_preferences: dict[str, list[str]] = _empty_schedule_preferences()
+        self._schedule_action_history: list[dict[str, Any]] = []
 
     def run(
         self,
@@ -49,6 +58,9 @@ class AcademicAgent:
         max_credits: float = DEFAULT_MAX_CREDITS,
         completed_courses: list[str] | None = None,
     ) -> dict[str, Any]:
+        if self._should_handle_as_schedule_course_description(message):
+            return self.describe_scheduled_course(message)
+
         if self._should_handle_as_schedule(message):
             return self.generate_schedule(
                 message,
@@ -95,6 +107,11 @@ class AcademicAgent:
         self._remember(message, result["response"])
         return result
 
+    def describe_scheduled_course(self, message: str) -> dict[str, Any]:
+        result = self._scheduled_course_description_run(message)
+        self._remember(message, result["response"])
+        return result
+
     def generate_schedule(
         self,
         message: str,
@@ -122,6 +139,10 @@ class AcademicAgent:
             effective_selected_courses,
             schedule_preferences.get("different_timing_targets") or [],
         )
+        avoided_section_identifiers = _dedupe_text([
+            *avoided_section_identifiers,
+            *_current_sections_for_targeted_time_avoidance(message, effective_selected_courses),
+        ])
         lookup_query = _query_with_persisted_campus(message, schedule_preferences)
         result = self._schedule_from_database_run(
             message,
@@ -139,6 +160,7 @@ class AcademicAgent:
         self._remember(message, result["response"])
         self._remember_schedule(result)
         self._remember_schedule_preferences(schedule_preferences)
+        self._remember_schedule_action(message, result, schedule_preferences)
         return result
 
     def _get_agent(self) -> Any:
@@ -160,9 +182,18 @@ class AcademicAgent:
         self._messages.clear()
         self._last_schedule_courses.clear()
         self._last_schedule_preferences = _empty_schedule_preferences()
+        self._schedule_action_history.clear()
 
     def memory_snapshot(self) -> list[dict[str, str]]:
         return list(self._messages)
+
+    def state_snapshot(self) -> dict[str, Any]:
+        return {
+            "current_schedule": json.loads(json.dumps(self._last_schedule_courses, default=str)),
+            "current_preferences": json.loads(json.dumps(self._last_schedule_preferences, default=str)),
+            "schedule_actions": json.loads(json.dumps(self._schedule_action_history, default=str)),
+            "message_count": len(self._messages),
+        }
 
     def _schedule_fallback_run(
         self,
@@ -292,9 +323,39 @@ class AcademicAgent:
             "data": {"results": json.loads(json.dumps(courses, default=str))},
         }
 
+    def _scheduled_course_description_run(self, message: str) -> dict[str, Any]:
+        target = _match_scheduled_course_from_message(message, self._last_schedule_courses)
+        if not target:
+            response = "Which scheduled course do you want the description for?"
+            return {"response": response, "data": {"results": []}}
+
+        query = f"{target.get('course_code')} {target.get('course_name')} course description"
+        matches = retrieve_relevant_courses(query, top_k=10)
+        target_code = _compact_code(target.get("course_code"))
+        selected = next(
+            (course for course in matches if _compact_code(course.get("course_code")) == target_code),
+            None,
+        )
+        if not selected:
+            selected = {
+                "course_code": target.get("course_code"),
+                "course_name": target.get("course_name"),
+                "description": target.get("description"),
+                "department": target.get("department"),
+                "department_name": target.get("department_name"),
+            }
+
+        response = _format_single_course_description(selected)
+        return {
+            "response": response,
+            "data": {"result": json.loads(json.dumps(selected, default=str))},
+        }
+
     def _conversation_run(self, message: str) -> dict[str, Any]:
         facts = {
             "last_schedule_courses": self._last_schedule_courses,
+            "last_schedule_preferences": self._last_schedule_preferences,
+            "schedule_action_history": self._schedule_action_history,
             "available_actions": [
                 "Ask for a schedule with course names, course codes, CRNs, campus, days, instructor constraints, or credit target.",
                 "Ask for courses similar to a topic or description to use ChromaDB semantic search with Qwen reranking.",
@@ -361,10 +422,60 @@ class AcademicAgent:
                 else _dedupe_text(values)
             )
 
+    def _remember_schedule_action(
+        self,
+        message: str,
+        result: dict[str, Any],
+        preferences: dict[str, list[str]],
+    ) -> None:
+        data = result.get("data") or {}
+        best = data.get("best_schedule") or {}
+        selected = best.get("selected_courses") or []
+        action = {
+            "user_message": message,
+            "selected_courses": [
+                {
+                    "course_code": course.get("course_code"),
+                    "course_name": course.get("course_name"),
+                    "section": course.get("section"),
+                    "crn": course.get("crn"),
+                    "campus": course.get("campus"),
+                    "days": course.get("days"),
+                    "time": course.get("time"),
+                    "instructor": course.get("instructor"),
+                }
+                for course in selected
+            ],
+            "constraints": {
+                "preferred_days": preferences.get("preferred_days", []),
+                "avoided_days": preferences.get("avoided_days", []),
+                "avoided_instructors": preferences.get("avoided_instructors", []),
+                "removed_course_identifiers": preferences.get("removed_course_identifiers", []),
+                "avoided_time_blocks": preferences.get("avoided_time_blocks", []),
+                "campus": preferences.get("campus", []),
+            },
+            "total_credits": best.get("total_credits"),
+            "conflict_count": len(best.get("conflicts") or []),
+        }
+        self._schedule_action_history.append(json.loads(json.dumps(action, default=str)))
+        if len(self._schedule_action_history) > 20:
+            self._schedule_action_history = self._schedule_action_history[-20:]
+
     def _should_handle_as_schedule(self, message: str) -> bool:
         if SCHEDULE_INTENT_RE.search(message):
             return True
+        course_codes = extract_course_codes(message)
+        if course_codes and (
+            COURSE_TAKING_RE.search(message)
+            or SCHEDULE_CONSTRAINT_RE.search(message)
+            or extract_campus(message)
+            or len(course_codes) >= 2
+        ):
+            return True
         return bool(self._last_schedule_courses and SCHEDULE_CONSTRAINT_RE.search(message))
+
+    def _should_handle_as_schedule_course_description(self, message: str) -> bool:
+        return bool(self._last_schedule_courses and COURSE_DESCRIPTION_RE.search(message))
 
     def _should_handle_as_course_search(self, message: str) -> bool:
         if self._last_schedule_courses and SCHEDULE_CONSTRAINT_RE.search(message):
@@ -389,6 +500,74 @@ def _format_course_result(index: int, course: dict[str, Any]) -> str:
         f"{index}. {course.get('course_code')} - {course.get('course_name')}"
         f"{credits_text}{department_text}{description_text}"
     )
+
+
+def _format_single_course_description(course: dict[str, Any]) -> str:
+    code = course.get("course_code") or "N/A"
+    name = course.get("course_name") or "N/A"
+    department = course.get("department_name") or course.get("department")
+    department_text = f" | {department}" if department else ""
+    description = str(course.get("description") or "No description was found for this course.").strip()
+    return f"{code} - {name}{department_text}\n{description}"
+
+
+def _match_scheduled_course_from_message(
+    message: str,
+    current_courses: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not current_courses:
+        return None
+
+    codes = extract_course_codes(message)
+    for code in codes:
+        compact = _compact_code(code)
+        for course in current_courses:
+            if _compact_code(course.get("course_code")) == compact:
+                return course
+
+    candidates = [
+        course
+        for course in current_courses
+        if _course_matches_any_text(course, [_strip_description_words(message)])
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    normalized_message = _normalize_identifier(_strip_description_words(message))
+    best_course = None
+    best_score = 0
+    for course in current_courses:
+        values = [
+            course.get("course_code"),
+            course.get("course_name"),
+            course.get("title"),
+            course.get("crn"),
+        ]
+        for value in values:
+            normalized_value = _normalize_identifier(value)
+            if not normalized_value:
+                continue
+            score = 100 if normalized_value in normalized_message else 0
+            if score == 0 and min(len(normalized_value), len(normalized_message)) >= 5:
+                try:
+                    from rapidfuzz import fuzz
+
+                    score = fuzz.WRatio(normalized_message, normalized_value)
+                except Exception:
+                    score = 0
+            if score > best_score:
+                best_score = score
+                best_course = course
+    return best_course if best_score >= 78 else None
+
+
+def _strip_description_words(message: str) -> str:
+    return re.sub(
+        r"\b(description|describe|details?|what\s+is|tell\s+me\s+about|explain|course|class|the|of|for|in\s+my\s+schedule)\b",
+        " ",
+        message,
+        flags=re.IGNORECASE,
+    ).strip()
 
 
 def _resolve_course_names_with_rag(message: str) -> list[dict[str, Any]]:
@@ -474,7 +653,15 @@ def _extract_schedule_preferences(
         "removed_course_identifiers": _extract_removed_course_identifiers(message),
         "different_timing_targets": _extract_timing_change_targets(message),
         "avoided_time_blocks": _extract_avoided_time_blocks(message),
+        "targeted_time_avoidance_targets": [
+            target["course"]
+            for target in _extract_targeted_time_avoidance_targets(message)
+            if target.get("course")
+        ],
     }
+    if _has_actionable_preferences(deterministic):
+        return deterministic
+
     gemini = extract_schedule_constraints_with_gemini(
         user_request=message,
         current_schedule=current_courses or [],
@@ -508,6 +695,82 @@ def _current_sections_for_different_timing(
         if course_code and section:
             identifiers.append(f"{course_code}{section}")
     return _dedupe_text(identifiers)
+
+
+def _current_sections_for_targeted_time_avoidance(
+    message: str,
+    current_courses: list[dict[str, Any]],
+) -> list[str]:
+    if not current_courses:
+        return []
+
+    targets = _extract_targeted_time_avoidance_targets(message)
+    if not targets:
+        return []
+
+    identifiers: list[str] = []
+    for target in targets:
+        target_texts = [target["course"]]
+        target_time = parse_time_value(target["time"])
+        for course in current_courses:
+            if not _course_matches_any_text(course, target_texts):
+                continue
+            if target_time and not _course_matches_time(course, target_time):
+                continue
+            identifiers.extend(_section_identifiers(course))
+    return _dedupe_text(identifiers)
+
+
+def _extract_targeted_time_avoidance_targets(message: str) -> list[dict[str, str]]:
+    targets: list[dict[str, str]] = []
+    avoid_prefix = r"(?:do not want|don't want|dont want|avoid|without|no|not)"
+    patterns = [
+        rf"\b{avoid_prefix}\b\s+(?P<course>[^.?!,]+?)\s+(?:at|around|by)\s+(?P<time>\d{{1,2}}(?::\d{{2}})?\s*(?:am|pm)?)\b",
+        rf"\b(?P<course>[^.?!,]+?)\s+(?:should\s+)?(?:not|never)\s+(?:be\s+)?(?:at|around|by)\s+(?P<time>\d{{1,2}}(?::\d{{2}})?\s*(?:am|pm)?)\b",
+        rf"\b(?:move|change|switch)\s+(?P<course>[^.?!,]+?)\s+(?:away\s+from|from)\s+(?P<time>\d{{1,2}}(?::\d{{2}})?\s*(?:am|pm)?)\b",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, message, re.IGNORECASE):
+            course = _clean_time_avoidance_course(match.group("course"))
+            time_text = _infer_bare_time_meridiem(match.group("time"), "unavailable time")
+            if course and time_text:
+                targets.append({"course": course, "time": time_text})
+    return targets
+
+
+def _clean_time_avoidance_course(value: str) -> str:
+    cleaned = re.sub(
+        r"^(?:i\s+)?(?:do not want|don't want|dont want|avoid|without|no|not|the|this|course|class)\s+",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return cleaned.strip(" ,;")
+
+
+def _course_matches_time(course: dict[str, Any], target_time: Any) -> bool:
+    start = parse_time_value(course.get("start_time"))
+    end = parse_time_value(course.get("end_time"))
+    if not start:
+        return False
+    if start == target_time:
+        return True
+    if end and start <= target_time < end:
+        return True
+    return False
+
+
+def _section_identifiers(course: dict[str, Any]) -> list[str]:
+    identifiers: list[str] = []
+    for key in ("crn", "id"):
+        value = course.get(key)
+        if value not in (None, ""):
+            identifiers.append(str(value))
+    course_code = str(course.get("course_code") or "")
+    section = str(course.get("section") or "")
+    if course_code and section:
+        identifiers.append(f"{course_code}{section}")
+    return identifiers
 
 
 def _extract_timing_change_targets(message: str) -> list[str]:
@@ -642,6 +905,7 @@ def _has_actionable_preferences(preferences: dict[str, list[str]]) -> bool:
             "removed_course_identifiers",
             "different_timing_targets",
             "avoided_time_blocks",
+            "targeted_time_avoidance_targets",
         )
     )
 
@@ -973,6 +1237,7 @@ def _is_plausible_instructor_name(value: str) -> bool:
         "afternoon",
         "evening",
         "then",
+        "at",
     }:
         return False
     if _is_day_like_text(normalized):

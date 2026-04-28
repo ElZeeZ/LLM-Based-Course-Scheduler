@@ -72,6 +72,10 @@ button {
     #ffffff;
 }
 
+.login-brand-panel > .eyebrow {
+  margin-top: 18px;
+}
+
 .brand-mark,
 .navbar-logo,
 .assistant-avatar-large {
@@ -237,6 +241,8 @@ button {
 .primary-button,
 .ghost-button,
 .icon-button,
+.save-schedule-button,
+.pdf-view-button,
 .floating-ai-button {
   display: inline-flex;
   align-items: center;
@@ -263,7 +269,9 @@ button {
 }
 
 .primary-button:disabled,
-.ghost-button:disabled {
+.ghost-button:disabled,
+.save-schedule-button:disabled,
+.pdf-view-button:disabled {
   cursor: not-allowed;
   opacity: 0.68;
   transform: none;
@@ -315,15 +323,16 @@ button {
 
 .app-shell {
   min-height: 100vh;
+  overflow-x: clip;
 }
 
 .top-navbar {
   position: sticky;
   top: 0;
   z-index: 20;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 24px;
   padding: 18px 28px;
   border-bottom: 1px solid rgba(203, 213, 225, 0.7);
@@ -350,6 +359,7 @@ button {
 
 .navbar-title {
   gap: 14px;
+  min-width: 0;
 }
 
 .navbar-logo {
@@ -368,8 +378,27 @@ button {
   font-size: 0.86rem;
 }
 
+.navbar-greeting {
+  justify-self: center;
+  min-width: 0;
+  max-width: 280px;
+  overflow-wrap: anywhere;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 0.9rem;
+  font-weight: 850;
+  text-align: center;
+}
+
 .navbar-actions {
   gap: 12px;
+  justify-self: end;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .profile-badge {
@@ -381,6 +410,11 @@ button {
   color: #334155;
   font-size: 0.88rem;
   font-weight: 800;
+}
+
+.profile-badge span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .ghost-button {
@@ -399,7 +433,10 @@ button {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 370px) minmax(560px, 1fr) minmax(320px, 380px);
+  width: 100%;
+  max-width: 100%;
+  grid-template-columns: minmax(280px, 350px) minmax(0, 1fr) minmax(280px, 350px);
+  align-items: start;
   gap: 22px;
   padding: 24px;
 }
@@ -408,6 +445,10 @@ button {
 .center-panel,
 .right-sidebar {
   min-width: 0;
+}
+
+.center-panel {
+  overflow: hidden;
 }
 
 .sidebar-stack,
@@ -423,6 +464,10 @@ button {
   position: sticky;
   top: 92px;
   align-self: start;
+}
+
+.left-sidebar {
+  padding-bottom: 96px;
 }
 
 .panel-card,
@@ -502,6 +547,53 @@ button {
   color: #dc2626 !important;
 }
 
+.schedule-save-area {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.save-schedule-button,
+.pdf-view-button {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 13px;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 0.84rem;
+}
+
+.pdf-view-button {
+  background: #ffffff;
+}
+
+.save-schedule-button:hover:not(:disabled),
+.pdf-view-button:hover:not(:disabled) {
+  border-color: #a5b4fc;
+  background: #e0e7ff;
+  transform: translateY(-1px);
+}
+
+.schedule-save-message {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.schedule-save-message.success {
+  color: #047857;
+}
+
+.schedule-save-message.error {
+  color: #dc2626;
+}
+
+.schedule-save-message.muted {
+  color: #64748b;
+}
+
 .warning-strip {
   display: flex;
   gap: 10px;
@@ -524,6 +616,7 @@ button {
 }
 
 .timetable-card {
+  max-width: 100%;
   overflow: hidden;
 }
 
@@ -561,7 +654,9 @@ button {
 }
 
 .timetable-scroll {
+  max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .timetable-header-row {
@@ -610,7 +705,7 @@ button {
   display: grid;
   min-width: 920px;
   grid-template-columns: 78px 1fr;
-  height: 760px;
+  height: 900px;
 }
 
 .time-axis {
@@ -627,6 +722,14 @@ button {
   font-size: 0.72rem;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.time-axis span:first-child {
+  transform: translateY(0);
+}
+
+.time-axis span:last-child {
+  transform: translateY(-100%);
 }
 
 .timetable-grid-area {
@@ -779,6 +882,7 @@ button {
   max-height: calc(100vh - 434px);
   overflow-y: auto;
   padding-right: 4px;
+  padding-bottom: 96px;
 }
 
 .manual-sections-panel {
@@ -1511,7 +1615,6 @@ button {
 .chat-bubble p {
   margin: 0;
   line-height: 1.55;
-  white-space: pre-line;
 }
 
 .chat-input-row {
@@ -1618,7 +1721,7 @@ button {
 
 @media (max-width: 1280px) {
   .dashboard-grid {
-    grid-template-columns: minmax(320px, 380px) minmax(560px, 1fr);
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
   }
 
   .right-sidebar {
@@ -1692,6 +1795,15 @@ button {
   .timetable-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .top-navbar {
+    display: flex;
+  }
+
+  .navbar-greeting {
+    justify-self: start;
+    max-width: 100%;
   }
 
   .navbar-actions {
